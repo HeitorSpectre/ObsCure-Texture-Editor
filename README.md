@@ -9,6 +9,12 @@ ObsCure Texture Tool is a tool for editing textures from this franchise, designe
 
 ---
 
+## IMAGES
+<img width="1184" height="792" alt="image" src="https://github.com/user-attachments/assets/57d010ea-236a-482a-a877-9705b9506b87" />
+<img width="1184" height="789" alt="image" src="https://github.com/user-attachments/assets/a4a89905-65fd-46cc-8ecf-961182d2247b" />
+
+
+
 ## SUPPORTED FORMATS / PLATFORMS
 
 ### Containers
