@@ -33,9 +33,13 @@ public sealed class MainForm : Form
 
     private string? _rootFolder;
     private HvtFile? _currentFile;
+    private FinalExamHvt? _currentFx;
     private HviFile? _currentHvi;
     private DicTexture? _currentDicTexture;
+    private XbrTexture? _currentXbrTexture;
     private readonly System.Collections.Generic.Dictionary<string, DicFile> _dicCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Generic.Dictionary<string, XbrFile> _xbrCache =
         new(StringComparer.OrdinalIgnoreCase);
     private Bitmap? _currentBitmap;
     private float _zoom = 1.0f;
@@ -44,7 +48,7 @@ public sealed class MainForm : Form
 
     public MainForm(string? initialPath)
     {
-        Text = "ObsCure Texture Editor — PC/PS2/Wii";
+        Text = "ObsCure Texture Editor — PC/PS2/Wii/Xbox";
         Width = 1200;
         Height = 800;
         StartPosition = FormStartPosition.CenterScreen;
@@ -196,7 +200,7 @@ public sealed class MainForm : Form
     {
         using var fbd = new FolderBrowserDialog
         {
-            Description = "Select folder containing texture files (.hvt / .hvi / .dic / .dip)",
+            Description = "Select folder containing texture files (.hvt / .hvi / .dic / .dip / .xbr)",
             UseDescriptionForTitle = true
         };
         if (fbd.ShowDialog(this) == DialogResult.OK) LoadFolder(fbd.SelectedPath);
@@ -290,6 +294,23 @@ public sealed class MainForm : Form
                     fileNode.Nodes.Add(new TreeNode($"<load error: {ex.Message}>"));
                 }
             }
+            else if (IsXbr(file))
+            {
+                try
+                {
+                    var xbr = new XbrFile(file);
+                    _xbrCache[file] = xbr;
+                    foreach (var t in xbr.Textures)
+                    {
+                        var label = $"[{t.Index:D3}] {t.Name}";
+                        fileNode.Nodes.Add(new TreeNode(label) { Tag = t });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    fileNode.Nodes.Add(new TreeNode($"<load error: {ex.Message}>"));
+                }
+            }
         }
     }
 
@@ -298,7 +319,9 @@ public sealed class MainForm : Form
     private static bool IsDic(string path) =>
         path.EndsWith(".dic", StringComparison.OrdinalIgnoreCase)
      || path.EndsWith(".dip", StringComparison.OrdinalIgnoreCase);
-    private static bool IsSupported(string path) => IsHvt(path) || IsHvi(path) || IsDic(path);
+    private static bool IsXbr(string path) => path.EndsWith(".xbr", StringComparison.OrdinalIgnoreCase);
+    private static bool IsContainer(string path) => IsDic(path) || IsXbr(path);
+    private static bool IsSupported(string path) => IsHvt(path) || IsHvi(path) || IsContainer(path);
 
     // ----------------------------------------------------------------------
     // Selection handling
@@ -306,42 +329,49 @@ public sealed class MainForm : Form
     private void OnTreeSelect(TreeNode? node)
     {
         if (node == null) return;
-        if (node.Tag is DicTexture tex)
-        {
-            DisplayDicTexture(tex);
-            return;
-        }
+        if (node.Tag is DicTexture dtex) { DisplayDicTexture(dtex); return; }
+        if (node.Tag is XbrTexture xtex) { DisplayXbrTexture(xtex); return; }
         if (node.Tag is not string path) { ClearImage(); return; }
         if (Directory.Exists(path)) { ClearImage(); return; }
         if (!File.Exists(path) || !IsSupported(path)) { ClearImage(); return; }
-        if (IsDic(path))
+        if (IsContainer(path))
         {
-            // Selecting the DIC file itself: clear the viewer (user picks a child texture)
-            // but enable the "Extract All" button for the whole DIC.
+            // Container file selection: clear the viewer (user expands to pick a
+            // child texture) but enable the matching "Extract All" button.
             ClearImage();
+            int count = 0;
             if (_dicCache.TryGetValue(path, out var dic))
             {
                 _currentDicForExtractAll = dic;
                 _btnExtractAllDic.Enabled = true;
-                _statusLabel.Text = $"{path}  —  {dic.Textures.Count} textures (expand to pick one)";
+                count = dic.Textures.Count;
             }
-            else
+            else if (_xbrCache.TryGetValue(path, out var xbr))
             {
-                _statusLabel.Text = path + "  —  expand to pick a texture";
+                _currentXbrForExtractAll = xbr;
+                _btnExtractAllDic.Enabled = true;
+                count = xbr.Textures.Count;
             }
+            _statusLabel.Text = count > 0
+                ? $"{path}  —  {count} textures (expand to pick one)"
+                : path + "  —  expand to pick a texture";
             return;
         }
         TryDisplay(path);
     }
 
     private DicFile? _currentDicForExtractAll;
+    private XbrFile? _currentXbrForExtractAll;
 
     private void ClearImage()
     {
         _currentFile = null;
+        _currentFx = null;
         _currentHvi = null;
         _currentDicTexture = null;
+        _currentXbrTexture = null;
         _currentDicForExtractAll = null;
+        _currentXbrForExtractAll = null;
         _picture.Image?.Dispose();
         _picture.Image = null;
         _currentBitmap?.Dispose();
@@ -363,6 +393,7 @@ public sealed class MainForm : Form
             _currentBitmap = bmp;
             _picture.Image = bmp;
             _currentFile = null;
+            _currentFx = null;
             _currentHvi = null;
             _currentDicTexture = tex;
             _currentDicForExtractAll = tex.Owner;
@@ -370,6 +401,38 @@ public sealed class MainForm : Form
             _btnExtractAllDic.Enabled = true;
             _btnReinsert.Enabled = true;
             _formatLabel.Text = $"{tex.FormatLabel}  {tex.Width}×{tex.Height}  {tex.Bpp}bpp";
+            _statusLabel.Text = $"{tex.Owner.Path}  ▸  [{tex.Index}] {tex.Name}";
+            if (!_fitToWindow) SetZoom(_zoom);
+            _picture.Invalidate();
+        }
+        catch (Exception ex)
+        {
+            ClearImage();
+            _formatLabel.Text = "decode error";
+            _statusLabel.Text = $"[{tex.Index}] {tex.Name}: {ex.Message}";
+        }
+    }
+
+    private void DisplayXbrTexture(XbrTexture tex)
+    {
+        try
+        {
+            byte[] bgra = XbrCodec.DecodeToBgra(tex);
+            var bmp = BgraToBitmap(bgra, tex.Width, tex.Height);
+            _picture.Image?.Dispose();
+            _currentBitmap?.Dispose();
+            _currentBitmap = bmp;
+            _picture.Image = bmp;
+            _currentFile = null;
+            _currentFx = null;
+            _currentHvi = null;
+            _currentDicTexture = null;
+            _currentXbrTexture = tex;
+            _currentXbrForExtractAll = tex.Owner;
+            _btnExtract.Enabled = true;
+            _btnExtractAllDic.Enabled = true;
+            _btnReinsert.Enabled = true;
+            _formatLabel.Text = $"{tex.FormatLabel}  {tex.Width}×{tex.Height}  {tex.Bpp}bpp  mips={tex.MipmapLevels}";
             _statusLabel.Text = $"{tex.Owner.Path}  ▸  [{tex.Index}] {tex.Name}";
             if (!_fitToWindow) SetZoom(_zoom);
             _picture.Invalidate();
@@ -398,6 +461,17 @@ public sealed class MainForm : Form
                 formatLabel = hvi.FormatLabel;
                 _currentHvi = hvi;
                 _currentFile = null;
+                _currentFx = null;
+            }
+            else if (FinalExamHvt.LooksLikeFinalExam(path))
+            {
+                var fx = new FinalExamHvt(path);
+                bgra = FinalExamCodec.DecodeToBgra(fx);
+                w = fx.Width; h = fx.Height;
+                formatLabel = fx.FormatLabel;
+                _currentFx = fx;
+                _currentFile = null;
+                _currentHvi = null;
             }
             else
             {
@@ -407,6 +481,7 @@ public sealed class MainForm : Form
                 formatLabel = $"{hvt.FormatTag} ({hvt.Format})  {hvt.Width}×{hvt.Height}  {hvt.Bpp}bpp";
                 _currentFile = hvt;
                 _currentHvi = null;
+                _currentFx = null;
             }
 
             var bmp = BgraToBitmap(bgra, w, h);
@@ -440,9 +515,11 @@ public sealed class MainForm : Form
         string defaultName;
         if (_currentDicTexture != null)
             defaultName = $"{_currentDicTexture.Index:D3}_{SafeFilename(_currentDicTexture.Name)}.png";
+        else if (_currentXbrTexture != null)
+            defaultName = $"{_currentXbrTexture.Index:D3}_{SafeFilename(_currentXbrTexture.Name)}.png";
         else
         {
-            string? srcPath = _currentFile?.Path ?? _currentHvi?.Path;
+            string? srcPath = _currentFile?.Path ?? _currentFx?.Path ?? _currentHvi?.Path;
             if (srcPath == null) return;
             defaultName = Path.GetFileNameWithoutExtension(srcPath) + ".png";
         }
@@ -475,6 +552,8 @@ public sealed class MainForm : Form
     private void ReinsertCurrent()
     {
         if (_currentDicTexture != null) { ReinsertDicTexture(); return; }
+        if (_currentXbrTexture != null) { ReinsertXbrTexture(); return; }
+        if (_currentFx != null) { ReinsertFinalExam(); return; }
 
         bool isHvi = _currentHvi != null;
         bool isHvt = _currentFile != null;
@@ -552,16 +631,18 @@ public sealed class MainForm : Form
     // ----------------------------------------------------------------------
     private void ExtractAllFromDic()
     {
-        var dic = _currentDicForExtractAll;
-        if (dic == null) return;
+        // Resolve which container is currently active.
+        string? containerPath = _currentDicForExtractAll?.Path ?? _currentXbrForExtractAll?.Path;
+        if (containerPath == null) return;
+        int total = _currentDicForExtractAll?.Textures.Count ?? _currentXbrForExtractAll?.Textures.Count ?? 0;
 
         string defaultFolder = Path.Combine(
-            Path.GetDirectoryName(dic.Path)!,
-            Path.GetFileNameWithoutExtension(dic.Path));
+            Path.GetDirectoryName(containerPath)!,
+            Path.GetFileNameWithoutExtension(containerPath));
 
         using var fbd = new FolderBrowserDialog
         {
-            Description = $"Select output folder for {dic.Textures.Count} textures",
+            Description = $"Select output folder for {total} textures",
             UseDescriptionForTitle = true,
             SelectedPath = defaultFolder
         };
@@ -570,23 +651,176 @@ public sealed class MainForm : Form
 
         int ok = 0, fail = 0;
         var log = new System.Text.StringBuilder();
-        foreach (var t in dic.Textures)
+        if (_currentDicForExtractAll != null)
         {
-            try
+            foreach (var t in _currentDicForExtractAll.Textures)
             {
-                byte[] bgra = DicCodec.DecodeToBgra(t);
-                using var bmp = BgraToBitmap(bgra, t.Width, t.Height);
-                string name = $"{t.Index:D3}_{SafeFilename(t.Name)}_{t.Width}x{t.Height}_{t.Format}.png";
-                bmp.Save(Path.Combine(fbd.SelectedPath, name), ImageFormat.Png);
-                ok++;
+                try
+                {
+                    byte[] bgra = DicCodec.DecodeToBgra(t);
+                    using var bmp = BgraToBitmap(bgra, t.Width, t.Height);
+                    string name = $"{t.Index:D3}_{SafeFilename(t.Name)}_{t.Width}x{t.Height}_{t.Format}.png";
+                    bmp.Save(Path.Combine(fbd.SelectedPath, name), ImageFormat.Png);
+                    ok++;
+                }
+                catch (Exception ex) { fail++; log.AppendLine($"[{t.Index}] {t.Name}: {ex.Message}"); }
             }
-            catch (Exception ex) { fail++; log.AppendLine($"[{t.Index}] {t.Name}: {ex.Message}"); }
         }
-        string msg = $"Extracted {ok} / {dic.Textures.Count} textures to:\n{fbd.SelectedPath}";
+        else if (_currentXbrForExtractAll != null)
+        {
+            foreach (var t in _currentXbrForExtractAll.Textures)
+            {
+                try
+                {
+                    byte[] bgra = XbrCodec.DecodeToBgra(t);
+                    using var bmp = BgraToBitmap(bgra, t.Width, t.Height);
+                    string name = $"{t.Index:D3}_{SafeFilename(t.Name)}_{t.Width}x{t.Height}_{t.Format}.png";
+                    bmp.Save(Path.Combine(fbd.SelectedPath, name), ImageFormat.Png);
+                    ok++;
+                }
+                catch (Exception ex) { fail++; log.AppendLine($"[{t.Index}] {t.Name}: {ex.Message}"); }
+            }
+        }
+        string msg = $"Extracted {ok} / {total} textures to:\n{fbd.SelectedPath}";
         if (fail > 0) msg += $"\n\nFailures ({fail}):\n{log}";
-        MessageBox.Show(msg, "Extract All (DIC)", MessageBoxButtons.OK,
+        MessageBox.Show(msg, "Extract All", MessageBoxButtons.OK,
             fail > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
-        _statusLabel.Text = $"DIC extract: {ok} ok, {fail} failed.";
+        _statusLabel.Text = $"Extract: {ok} ok, {fail} failed.";
+    }
+
+    private void ReinsertXbrTexture()
+    {
+        var tex = _currentXbrTexture;
+        if (tex == null) return;
+
+        using var ofd = new OpenFileDialog
+        {
+            Filter = "PNG image|*.png|All files|*.*",
+            Title = $"Select PNG to reinsert into [{tex.Index}] {tex.Name}"
+        };
+        if (ofd.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            using var src = new Bitmap(ofd.FileName);
+            if (src.Width != tex.Width || src.Height != tex.Height)
+            {
+                var ans = MessageBox.Show(
+                    $"PNG is {src.Width}×{src.Height}, texture expects {tex.Width}×{tex.Height}.\nResize automatically?",
+                    "Size mismatch", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ans != DialogResult.Yes) return;
+            }
+            byte[] rgba = BitmapToRgba(src, tex.Width, tex.Height);
+            byte[] encoded = XbrCodec.EncodeFromRgba(tex, rgba);
+
+            int expected = tex.Width * tex.Height * tex.Bpp / 8;
+            if (encoded.Length != expected)
+            {
+                MessageBox.Show(
+                    $"Encoded mip0 is {encoded.Length} bytes; expected {expected}.",
+                    "Size mismatch", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (encoded.Length > tex.ImageSize)
+            {
+                MessageBox.Show(
+                    $"Encoded mip0 ({encoded.Length}) exceeds the slot ({tex.ImageSize}). " +
+                    "Cannot reinsert without resizing the container.",
+                    "Slot overflow", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string xbrPath = tex.Owner.Path;
+            string outPath = Path.Combine(
+                Path.GetDirectoryName(xbrPath)!,
+                Path.GetFileNameWithoutExtension(xbrPath) + "_new.xbr");
+
+            using var sfd = new SaveFileDialog
+            {
+                Filter = "XBR file|*.xbr",
+                FileName = Path.GetFileName(outPath),
+                InitialDirectory = Path.GetDirectoryName(outPath)
+            };
+            if (sfd.ShowDialog(this) != DialogResult.OK) return;
+
+            tex.Owner.ReplaceImageBytes(tex, encoded, encoded.Length);
+            tex.Owner.Save(sfd.FileName);
+
+            _statusLabel.Text = $"Reinserted [{tex.Index}] {tex.Name} → {sfd.FileName}";
+            DisplayXbrTexture(tex);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Reinsert failed:\n{ex.Message}", "Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Final Exam .hvt — reinsert single mip0 from PNG
+    // ----------------------------------------------------------------------
+    private void ReinsertFinalExam()
+    {
+        var fx = _currentFx;
+        if (fx == null) return;
+        if (fx.Format == FxPixelFormat.Unknown)
+        {
+            MessageBox.Show($"Reinsertion not supported for Final Exam format \"{fx.FormatTag}\".",
+                "Unsupported", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var ofd = new OpenFileDialog
+        {
+            Filter = "PNG image|*.png|All files|*.*",
+            Title = "Select PNG to reinsert"
+        };
+        if (ofd.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            using var src = new Bitmap(ofd.FileName);
+            if (src.Width != fx.Width || src.Height != fx.Height)
+            {
+                var ans = MessageBox.Show(
+                    $"PNG is {src.Width}×{src.Height}, file expects {fx.Width}×{fx.Height}.\nResize automatically?",
+                    "Size mismatch", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ans != DialogResult.Yes) return;
+            }
+            byte[] rgba = BitmapToRgba(src, fx.Width, fx.Height);
+            byte[] encoded = FinalExamCodec.EncodeFromRgba(fx, rgba);
+
+            if (encoded.Length != fx.Mip0Size)
+            {
+                MessageBox.Show(
+                    $"Encoded mip0 is {encoded.Length} bytes; slot expects {fx.Mip0Size}.",
+                    "Size mismatch", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string outPath = Path.Combine(
+                Path.GetDirectoryName(fx.Path)!,
+                Path.GetFileNameWithoutExtension(fx.Path) + "_new.hvt");
+
+            using var sfd = new SaveFileDialog
+            {
+                Filter = "HVT file|*.hvt",
+                FileName = Path.GetFileName(outPath),
+                InitialDirectory = Path.GetDirectoryName(outPath)
+            };
+            if (sfd.ShowDialog(this) != DialogResult.OK) return;
+
+            fx.SaveAs(sfd.FileName, encoded);
+            _statusLabel.Text = $"Reinserted: {sfd.FileName}";
+            var ask = MessageBox.Show("Reload the new file now?", "Done",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (ask == DialogResult.Yes) TryDisplay(sfd.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Reinsert failed:\n{ex.Message}", "Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -768,6 +1002,13 @@ public sealed class MainForm : Form
                     var (pal, pix) = Ps2Codec.EncodeFromRgba(hvi, rgba);
                     hvi.SaveAs(outPath, pal, pix);
                 }
+                else if (FinalExamHvt.LooksLikeFinalExam(hvtPath))
+                {
+                    var fx = new FinalExamHvt(hvtPath);
+                    byte[] rgba = BitmapToRgba(src, fx.Width, fx.Height);
+                    byte[] encoded = FinalExamCodec.EncodeFromRgba(fx, rgba);
+                    fx.SaveAs(outPath, encoded);
+                }
                 else
                 {
                     var hvt = new HvtFile(hvtPath);
@@ -847,7 +1088,7 @@ public sealed class MainForm : Form
         };
         var subtitleLabel = new Label
         {
-            Text = "PC / PS2 / Wii texture extractor & reinserter",
+            Text = "PC / PS2 / Wii / Xbox texture extractor & reinserter",
             Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
             ForeColor = Color.DimGray,
             AutoSize = false,
@@ -879,9 +1120,11 @@ public sealed class MainForm : Form
             "",
             "  Containers",
             "    .hvt  —  Nintendo Wii / GameCube standalone texture",
+            "    .hvt  —  Final Exam (HydraVision modern) standalone texture",
             "    .hvi  —  PlayStation 2 standalone paletted texture",
             "    .dic  —  Texture dictionary (PC, PS2 RenderWare, Wii GX)",
             "    .dip  —  PC ObsCure 1 texture dictionary (HydraVision)",
+            "    .xbr  —  Xbox classic texture dictionary (NV2A swizzled)",
             "",
             "  PC pixel formats (.dic)",
             "    R8G8B8A8  (32 bpp)",
@@ -898,6 +1141,11 @@ public sealed class MainForm : Form
             "    RGB5551   (16 bpp, little-endian)",
             "    RGBA8888  (32 bpp, PS2 alpha 0..128)",
             "",
+            "  Xbox classic pixel formats (.xbr, NV2A swizzled)",
+            "    SZ_R5G6B5    (16 bpp, Morton-order swizzle)",
+            "    SZ_A1R5G5B5  (16 bpp, Morton-order swizzle)",
+            "    SZ_A8R8G8B8  (32 bpp, Morton-order swizzle)",
+            "",
             "  Nintendo Wii / GameCube pixel formats",
             "    I8        (8 bpp grayscale, GX 8x4 tiles)",
             "    IA8       (16 bpp grayscale + alpha, 4x4 tiles)",
@@ -905,6 +1153,13 @@ public sealed class MainForm : Form
             "    RGBA8     (32 bpp, 4x4 AR/GB interleaved)",
             "    C4 / C8   (4/8 bpp paletted with TLUT)",
             "    CMPR      (4 bpp DXT1-style, PCA-quantized encoder)",
+            "",
+            "  Final Exam pixel formats (.hvt, magic \"HVI \")",
+            "    BGRA      (32 bpp linear)",
+            "    BGRX      (32 bpp linear, alpha forced opaque)",
+            "    TXD1      (DXT1 / BC1, 4 bpp)",
+            "    TXD3      (DXT3 / BC2, 8 bpp)",
+            "    TXD5      (DXT5 / BC3, 8 bpp)",
             "",
             "─────────  FEATURES  ─────────",
             "",
