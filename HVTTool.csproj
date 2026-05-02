@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ObsCureTextureEditor</AssemblyName>
+    <Product>ObsCure Texture Editor</Product>
+    <AssemblyTitle>ObsCure Texture Editor</AssemblyTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Tests/**" />
+    <None Remove="Tests/**" />
+    <EmbeddedResource Remove="Tests/**" />
+  </ItemGroup>
+
+</Project>
