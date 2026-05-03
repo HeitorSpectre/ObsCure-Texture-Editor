@@ -7,8 +7,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ObsCureTextureEditor</AssemblyName>
-    <Product>ObsCure Texture Editor</Product>
-    <AssemblyTitle>ObsCure Texture Editor</AssemblyTitle>
+    <Product>ObsCure Texture Editor PC/PS2/PS3/Wii/Xbox</Product>
+    <AssemblyTitle>ObsCure Texture Editor PC/PS2/PS3/Wii/Xbox</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>

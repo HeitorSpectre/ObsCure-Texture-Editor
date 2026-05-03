@@ -48,7 +48,7 @@ public sealed class MainForm : Form
 
     public MainForm(string? initialPath)
     {
-        Text = "ObsCure Texture Editor — PC/PS2/Wii/Xbox";
+        Text = "ObsCure Texture Editor — PC/PS2/PS3/Wii/Xbox";
         Width = 1200;
         Height = 800;
         StartPosition = FormStartPosition.CenterScreen;
@@ -1074,7 +1074,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(560, 520)
+            ClientSize = new Size(680, 520)
         };
 
         var titleLabel = new Label
@@ -1088,7 +1088,7 @@ public sealed class MainForm : Form
         };
         var subtitleLabel = new Label
         {
-            Text = "PC / PS2 / Wii / Xbox texture extractor & reinserter",
+            Text = "PC / PS2 / PS3 / Wii / Xbox texture extractor & reinserter",
             Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
             ForeColor = Color.DimGray,
             AutoSize = false,
@@ -1105,8 +1105,9 @@ public sealed class MainForm : Form
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = Color.White,
             Font = new Font("Consolas", 9f),
-            Location = new Point(20, 84),
-            Size = new Size(dlg.ClientSize.Width - 40, 380)
+            Location = new Point(12, 84),
+            Size = new Size(dlg.ClientSize.Width - 24, 380),
+            TabStop = false
         };
         info.Text = string.Join(Environment.NewLine, new[]
         {
@@ -1120,7 +1121,7 @@ public sealed class MainForm : Form
             "",
             "  Containers",
             "    .hvt  —  Nintendo Wii / GameCube standalone texture",
-            "    .hvt  —  Final Exam (HydraVision modern) standalone texture",
+            "    .hvt  —  Final Exam PC / PS3 / Xbox 360 (HydraVision modern) standalone",
             "    .hvi  —  PlayStation 2 standalone paletted texture",
             "    .dic  —  Texture dictionary (PC, PS2 RenderWare, Wii GX)",
             "    .dip  —  PC ObsCure 1 texture dictionary (HydraVision)",
@@ -1154,20 +1155,14 @@ public sealed class MainForm : Form
             "    C4 / C8   (4/8 bpp paletted with TLUT)",
             "    CMPR      (4 bpp DXT1-style, PCA-quantized encoder)",
             "",
-            "  Final Exam pixel formats (.hvt, magic \"HVI \")",
-            "    BGRA      (32 bpp linear)",
-            "    BGRX      (32 bpp linear, alpha forced opaque)",
-            "    TXD1      (DXT1 / BC1, 4 bpp)",
-            "    TXD3      (DXT3 / BC2, 8 bpp)",
-            "    TXD5      (DXT5 / BC3, 8 bpp)",
-            "",
-            "─────────  FEATURES  ─────────",
-            "",
-            "  • Folder-tree browser with live texture preview",
-            "  • Per-texture extract to PNG",
-            "  • Per-texture reinsert from PNG (in-place, size-checked)",
-            "  • Batch reinsert by filename matching (.hvt / .hvi)",
-            "  • Extract All from a .dic dictionary in one click",
+            "  Final Exam pixel formats (.hvt, PC \"HVI \" / PS3+X360 \" IVH\")",
+            "    BGRA      (PC, 32 bpp linear)",
+            "    BGRX      (PC, 32 bpp linear, alpha forced opaque)",
+            "    TXD1/DXT1 (PC+PS3, BC1, 4 bpp)",
+            "    TXD3/DXT3 (PC+PS3, BC2, 8 bpp)",
+            "    TXD5/DXT5 (PC+PS3, BC3, 8 bpp)",
+            "    ARGB      (PS3 32 bpp linear / X360 32 bpp 32×32 tiled)",
+            "    PS3+X360 headers are big-endian; BC blocks stay as PC LE.",
         });
 
         var okBtn = new Button
@@ -1183,6 +1178,12 @@ public sealed class MainForm : Form
         dlg.Controls.Add(subtitleLabel);
         dlg.Controls.Add(info);
         dlg.Controls.Add(okBtn);
+        dlg.Shown += (_, _) =>
+        {
+            info.SelectionStart = 0;
+            info.SelectionLength = 0;
+            okBtn.Focus();
+        };
         dlg.ShowDialog(this);
     }
 

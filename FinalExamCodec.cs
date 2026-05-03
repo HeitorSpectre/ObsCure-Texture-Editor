@@ -15,10 +15,40 @@ public static class FinalExamCodec
         byte[] raw = new byte[Math.Min(file.Mip0Size, file.Data.Length - file.PixelOffset)];
         Buffer.BlockCopy(file.Data, file.PixelOffset, raw, 0, raw.Length);
 
+        // X360 textures (pixels for ARGB, 4×4 blocks for BC1/3/5) are stored in
+        // the GPU 32-tile swizzle. Untile first, then run the generic PC-LE
+        // decoders below.
+        if (file.Platform == FxPlatform.X360)
+        {
+            if (file.Format == FxPixelFormat.ARGB)
+            {
+                byte[] linearArgb = UnswizzleX360(raw, file.AlignedWidth, file.AlignedHeight,
+                    blockPixelSize: 1, texelBytePitch: 4);
+                byte[] full = DecodeArgbBe(linearArgb, file.AlignedWidth, file.AlignedHeight);
+                return CropBgra(full, file.AlignedWidth, file.Width, file.Height);
+            }
+            if (file.IsBlockCompressed)
+            {
+                int blockBytes = file.Format == FxPixelFormat.TXD1 ? 8 : 16;
+                byte[] linearBc = UnswizzleX360(raw, file.AlignedWidth, file.AlignedHeight,
+                    blockPixelSize: 4, texelBytePitch: blockBytes);
+                X360BcByteSwap(linearBc); // 16-bit pair swap (X360 stores BC blocks big-endian)
+                byte[] full = file.Format switch
+                {
+                    FxPixelFormat.TXD1 => DecodeDxt1(linearBc, file.AlignedWidth, file.AlignedHeight),
+                    FxPixelFormat.TXD3 => DecodeDxt3(linearBc, file.AlignedWidth, file.AlignedHeight),
+                    FxPixelFormat.TXD5 => DecodeDxt5(linearBc, file.AlignedWidth, file.AlignedHeight),
+                    _ => throw new NotSupportedException()
+                };
+                return CropBgra(full, file.AlignedWidth, file.Width, file.Height);
+            }
+        }
+
         return file.Format switch
         {
             FxPixelFormat.BGRA => DecodeBgra(raw, file.Width, file.Height),
             FxPixelFormat.BGRX => DecodeBgrx(raw, file.Width, file.Height),
+            FxPixelFormat.ARGB => DecodeArgbBe(raw, file.Width, file.Height),
             FxPixelFormat.TXD1 => DecodeDxt1(raw, file.Width, file.Height),
             FxPixelFormat.TXD3 => DecodeDxt3(raw, file.Width, file.Height),
             FxPixelFormat.TXD5 => DecodeDxt5(raw, file.Width, file.Height),
@@ -28,15 +58,193 @@ public static class FinalExamCodec
 
     public static byte[] EncodeFromRgba(FinalExamHvt file, byte[] rgba)
     {
+        if (file.Platform == FxPlatform.X360)
+        {
+            if (file.Format == FxPixelFormat.ARGB)
+            {
+                byte[] padded = PadRgba(rgba, file.Width, file.Height, file.AlignedWidth, file.AlignedHeight);
+                byte[] linearArgb = EncodeArgbBe(padded, file.AlignedWidth, file.AlignedHeight);
+                return SwizzleX360(linearArgb, file.AlignedWidth, file.AlignedHeight,
+                    blockPixelSize: 1, texelBytePitch: 4);
+            }
+            if (file.IsBlockCompressed)
+            {
+                byte[] padded = PadRgba(rgba, file.Width, file.Height, file.AlignedWidth, file.AlignedHeight);
+                byte[] linear = file.Format switch
+                {
+                    FxPixelFormat.TXD1 => EncodeDxt1(padded, file.AlignedWidth, file.AlignedHeight),
+                    FxPixelFormat.TXD3 => EncodeDxt3(padded, file.AlignedWidth, file.AlignedHeight),
+                    FxPixelFormat.TXD5 => EncodeDxt5(padded, file.AlignedWidth, file.AlignedHeight),
+                    _ => throw new NotSupportedException()
+                };
+                int blockBytes = file.Format == FxPixelFormat.TXD1 ? 8 : 16;
+                X360BcByteSwap(linear);
+                return SwizzleX360(linear, file.AlignedWidth, file.AlignedHeight,
+                    blockPixelSize: 4, texelBytePitch: blockBytes);
+            }
+        }
+
         return file.Format switch
         {
             FxPixelFormat.BGRA => EncodeBgra(rgba, file.Width, file.Height),
             FxPixelFormat.BGRX => EncodeBgrx(rgba, file.Width, file.Height),
+            FxPixelFormat.ARGB => EncodeArgbBe(rgba, file.Width, file.Height),
             FxPixelFormat.TXD1 => EncodeDxt1(rgba, file.Width, file.Height),
             FxPixelFormat.TXD3 => EncodeDxt3(rgba, file.Width, file.Height),
             FxPixelFormat.TXD5 => EncodeDxt5(rgba, file.Width, file.Height),
             _ => throw new NotSupportedException($"Format \"{file.FormatTag}\" not supported.")
         };
+    }
+
+    // ==================================================================
+    // X360 GPU swizzle — direct port of ReverseBox's swizzle_x360.py, which
+    // has unit tests against several captured X360 BC1/BC2 textures. Works
+    // by enumerating the LINEAR (tiled) buffer and computing the destination
+    // (x, y) of every texel/block — the inverse of XGAddress2DTiledOffset.
+    //
+    // For BC formats use blockPixelSize=4, texelBytePitch=blockBytes (8 for
+    // BC1, 16 for BC2/BC3). For ARGB use blockPixelSize=1, texelBytePitch=4.
+    // ==================================================================
+    private static byte[] UnswizzleX360(byte[] swizzled, int width, int height,
+        int blockPixelSize, int texelBytePitch)
+    {
+        int wb = width  / blockPixelSize;
+        int hb = height / blockPixelSize;
+        int paddedWb = (wb + 31) & ~31;
+        int paddedHb = (hb + 31) & ~31;
+        int total = paddedWb * paddedHb;
+
+        byte[] o = new byte[wb * hb * texelBytePitch];
+        for (int blockOffset = 0; blockOffset < total; blockOffset++)
+        {
+            int x = X360TiledX(blockOffset, paddedWb, texelBytePitch);
+            int y = X360TiledY(blockOffset, paddedWb, texelBytePitch);
+            if (x >= wb || y >= hb) continue;
+            int src = blockOffset * texelBytePitch;
+            int dst = (y * wb + x) * texelBytePitch;
+            if (src + texelBytePitch > swizzled.Length) continue;
+            Buffer.BlockCopy(swizzled, src, o, dst, texelBytePitch);
+        }
+        return o;
+    }
+
+    private static byte[] SwizzleX360(byte[] linear, int width, int height,
+        int blockPixelSize, int texelBytePitch)
+    {
+        int wb = width  / blockPixelSize;
+        int hb = height / blockPixelSize;
+        int paddedWb = (wb + 31) & ~31;
+        int paddedHb = (hb + 31) & ~31;
+        int total = paddedWb * paddedHb;
+
+        byte[] o = new byte[total * texelBytePitch];
+        for (int blockOffset = 0; blockOffset < total; blockOffset++)
+        {
+            int x = X360TiledX(blockOffset, paddedWb, texelBytePitch);
+            int y = X360TiledY(blockOffset, paddedWb, texelBytePitch);
+            if (x >= wb || y >= hb) continue;
+            int src = (y * wb + x) * texelBytePitch;
+            int dst = blockOffset * texelBytePitch;
+            if (src + texelBytePitch > linear.Length) continue;
+            Buffer.BlockCopy(linear, src, o, dst, texelBytePitch);
+        }
+        return o;
+    }
+
+    private static byte[] CropBgra(byte[] bgra, int srcWidth, int dstWidth, int dstHeight)
+    {
+        byte[] o = new byte[dstWidth * dstHeight * 4];
+        int rowBytes = dstWidth * 4;
+        for (int y = 0; y < dstHeight; y++)
+            Buffer.BlockCopy(bgra, y * srcWidth * 4, o, y * rowBytes, rowBytes);
+        return o;
+    }
+
+    private static byte[] PadRgba(byte[] rgba, int srcWidth, int srcHeight, int dstWidth, int dstHeight)
+    {
+        if (srcWidth == dstWidth && srcHeight == dstHeight)
+            return rgba;
+
+        byte[] o = new byte[dstWidth * dstHeight * 4];
+        for (int y = 0; y < dstHeight; y++)
+        {
+            int sy = Math.Min(y, srcHeight - 1);
+            for (int x = 0; x < dstWidth; x++)
+            {
+                int sx = Math.Min(x, srcWidth - 1);
+                Buffer.BlockCopy(rgba, (sy * srcWidth + sx) * 4, o, (y * dstWidth + x) * 4, 4);
+            }
+        }
+        return o;
+    }
+
+    private static int X360TiledX(int blockOffset, int widthInBlocks, int texelBytePitch)
+    {
+        int alignedWidth = (widthInBlocks + 31) & ~31;
+        int logBpp = (texelBytePitch >> 2) + ((texelBytePitch >> 1) >> (texelBytePitch >> 2));
+        int offsetByte = blockOffset << logBpp;
+        int offsetTile = ((offsetByte & ~0xFFF) >> 3) + ((offsetByte & 0x700) >> 2) + (offsetByte & 0x3F);
+        int offsetMacro = offsetTile >> (7 + logBpp);
+
+        int macroX = (offsetMacro % (alignedWidth >> 5)) << 2;
+        int tile   = (((offsetTile >> (5 + logBpp)) & 2) + (offsetByte >> 6)) & 3;
+        int macro  = (macroX + tile) << 3;
+        int micro  = ((((offsetTile >> 1) & ~0xF) + (offsetTile & 0xF)) & ((texelBytePitch << 3) - 1)) >> logBpp;
+        return macro + micro;
+    }
+
+    private static int X360TiledY(int blockOffset, int widthInBlocks, int texelBytePitch)
+    {
+        int alignedWidth = (widthInBlocks + 31) & ~31;
+        int logBpp = (texelBytePitch >> 2) + ((texelBytePitch >> 1) >> (texelBytePitch >> 2));
+        int offsetByte = blockOffset << logBpp;
+        int offsetTile = ((offsetByte & ~0xFFF) >> 3) + ((offsetByte & 0x700) >> 2) + (offsetByte & 0x3F);
+        int offsetMacro = offsetTile >> (7 + logBpp);
+
+        int macroY = (offsetMacro / (alignedWidth >> 5)) << 2;
+        int tile   = ((offsetTile >> (6 + logBpp)) & 1) + ((offsetByte & 0x800) >> 10);
+        int macro  = (macroY + tile) << 3;
+        int micro  = (((offsetTile & ((texelBytePitch << 6) - 1 & ~0x1F)) + ((offsetTile & 0xF) << 1)) >> (3 + logBpp)) & ~1;
+        return macro + micro + ((offsetTile & 0x10) >> 4);
+    }
+
+    /// <summary>Byte-swap every 16-bit pair (ImageHeat's swap_byte_order_x360).</summary>
+    private static void X360BcByteSwap(byte[] data)
+    {
+        for (int i = 0; i + 1 < data.Length; i += 2)
+            (data[i], data[i + 1]) = (data[i + 1], data[i]);
+    }
+
+    // ==================================================================
+    // ARGB (PS3 big-endian linear) — bytes per pixel are A, R, G, B.
+    // ==================================================================
+    private static byte[] DecodeArgbBe(byte[] raw, int w, int h)
+    {
+        int n = w * h;
+        byte[] o = new byte[n * 4];
+        int lim = Math.Min(raw.Length, n * 4);
+        for (int i = 0; i + 3 < lim; i += 4)
+        {
+            o[i + 0] = raw[i + 3]; // B
+            o[i + 1] = raw[i + 2]; // G
+            o[i + 2] = raw[i + 1]; // R
+            o[i + 3] = raw[i + 0]; // A
+        }
+        return o;
+    }
+
+    private static byte[] EncodeArgbBe(byte[] rgba, int w, int h)
+    {
+        int n = w * h;
+        byte[] o = new byte[n * 4];
+        for (int i = 0; i < n; i++)
+        {
+            o[i * 4 + 0] = rgba[i * 4 + 3]; // A
+            o[i * 4 + 1] = rgba[i * 4 + 0]; // R
+            o[i * 4 + 2] = rgba[i * 4 + 1]; // G
+            o[i * 4 + 3] = rgba[i * 4 + 2]; // B
+        }
+        return o;
     }
 
     // ==================================================================
