@@ -1161,7 +1161,7 @@ public sealed class MainForm : Form
             "    TXD1/DXT1 (PC+PS3, BC1, 4 bpp)",
             "    TXD3/DXT3 (PC+PS3, BC2, 8 bpp)",
             "    TXD5/DXT5 (PC+PS3, BC3, 8 bpp)",
-            "    ARGB      (PS3 32 bpp linear / X360 32 bpp 32×32 tiled)",
+            "    ARGB      (PS3 RGBA linear / X360 32 bpp 32×32 tiled)",
             "    PS3+X360 headers are big-endian; BC blocks stay as PC LE.",
         });
 

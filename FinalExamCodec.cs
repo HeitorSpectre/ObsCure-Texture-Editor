@@ -48,6 +48,7 @@ public static class FinalExamCodec
         {
             FxPixelFormat.BGRA => DecodeBgra(raw, file.Width, file.Height),
             FxPixelFormat.BGRX => DecodeBgrx(raw, file.Width, file.Height),
+            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => DecodeRgba(raw, file.Width, file.Height),
             FxPixelFormat.ARGB => DecodeArgbBe(raw, file.Width, file.Height),
             FxPixelFormat.TXD1 => DecodeDxt1(raw, file.Width, file.Height),
             FxPixelFormat.TXD3 => DecodeDxt3(raw, file.Width, file.Height),
@@ -88,6 +89,7 @@ public static class FinalExamCodec
         {
             FxPixelFormat.BGRA => EncodeBgra(rgba, file.Width, file.Height),
             FxPixelFormat.BGRX => EncodeBgrx(rgba, file.Width, file.Height),
+            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => EncodeRgba(rgba, file.Width, file.Height),
             FxPixelFormat.ARGB => EncodeArgbBe(rgba, file.Width, file.Height),
             FxPixelFormat.TXD1 => EncodeDxt1(rgba, file.Width, file.Height),
             FxPixelFormat.TXD3 => EncodeDxt3(rgba, file.Width, file.Height),
@@ -243,6 +245,36 @@ public static class FinalExamCodec
             o[i * 4 + 1] = rgba[i * 4 + 0]; // R
             o[i * 4 + 2] = rgba[i * 4 + 1]; // G
             o[i * 4 + 3] = rgba[i * 4 + 2]; // B
+        }
+        return o;
+    }
+
+    // PS3 Final Exam files keep the ARGB tag, but the linear bytes are R,G,B,A.
+    private static byte[] DecodeRgba(byte[] raw, int w, int h)
+    {
+        int n = w * h;
+        byte[] o = new byte[n * 4];
+        int lim = Math.Min(raw.Length, n * 4);
+        for (int i = 0; i + 3 < lim; i += 4)
+        {
+            o[i + 0] = raw[i + 2]; // B
+            o[i + 1] = raw[i + 1]; // G
+            o[i + 2] = raw[i + 0]; // R
+            o[i + 3] = raw[i + 3]; // A
+        }
+        return o;
+    }
+
+    private static byte[] EncodeRgba(byte[] rgba, int w, int h)
+    {
+        int n = w * h;
+        byte[] o = new byte[n * 4];
+        for (int i = 0; i < n; i++)
+        {
+            o[i * 4 + 0] = rgba[i * 4 + 0]; // R
+            o[i * 4 + 1] = rgba[i * 4 + 1]; // G
+            o[i * 4 + 2] = rgba[i * 4 + 2]; // B
+            o[i * 4 + 3] = rgba[i * 4 + 3]; // A
         }
         return o;
     }
