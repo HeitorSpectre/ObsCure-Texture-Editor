@@ -1,6 +1,12 @@
 # ObsCure-Texture-Editor
 ObsCure Texture Editor is a tool for editing textures from this franchise, designed for Nintendo Wii, PC, PS2, PS3 and XBOX.
 
+## SUPPORTED GAMES
+
+- ObsCure I
+- Obscure II (Obscure: The Aftermath)
+- Final Exam
+
 ## CREDITS
 
 - HeitorSpectre  
