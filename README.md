@@ -11,7 +11,7 @@ ObsCure Texture Editor is a tool for editing textures from this franchise, desig
 
 - HeitorSpectre  
 - Evil Trainer  
-- marcos_haf — HNNEWGAMES  
+- [marcos_haf — HNNEWGAMES  ](https://github.com/marcoshaf)
 
 ---
 
