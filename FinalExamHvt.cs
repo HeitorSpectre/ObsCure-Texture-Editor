@@ -123,7 +123,7 @@ public sealed class FinalExamHvt
             int alignTexels = 32 * tileTexel;
             AlignedWidth  = (Width  + alignTexels - 1) & ~(alignTexels - 1);
             AlignedHeight = (Height + alignTexels - 1) & ~(alignTexels - 1);
-            Mip0Size    = ReadU32(0x80);
+            Mip0Size    = ComputeMip0Size(AlignedWidth, AlignedHeight, Format);
             PixelOffset = 0x84;
         }
         else
@@ -141,6 +141,16 @@ public sealed class FinalExamHvt
     private int ReadU32(int off) => IsBigEndian
         ? (Data[off] << 24) | (Data[off + 1] << 16) | (Data[off + 2] << 8) | Data[off + 3]
         : Data[off] | (Data[off + 1] << 8) | (Data[off + 2] << 16) | (Data[off + 3] << 24);
+
+    private static int ComputeMip0Size(int width, int height, FxPixelFormat format)
+    {
+        return format switch
+        {
+            FxPixelFormat.TXD1 => ((width + 3) / 4) * ((height + 3) / 4) * 8,
+            FxPixelFormat.TXD3 or FxPixelFormat.TXD5 => ((width + 3) / 4) * ((height + 3) / 4) * 16,
+            _ => width * height * 4
+        };
+    }
 
     public void Save(string path) => File.WriteAllBytes(path, Data);
 

@@ -24,9 +24,12 @@ public static class DicCodec
             DicPixelFormat.Dip_B8G8R8A8 => DecodeDip_B8G8R8A8(raw, t.Width, t.Height),
             DicPixelFormat.Dip_B5G6R5 => DecodeDip_B5G6R5(raw, t.Width, t.Height),
             DicPixelFormat.Dip_B5G5R5A1 => DecodeDip_B5G5R5A1(raw, t.Width, t.Height, t.AlphaFlag || t.OneBitAlphaFlag),
+            DicPixelFormat.PS2_4bpp_swizzled => DecodePs2_Pal4(raw, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.PS2_8bpp_swizzled => DecodePs2_Pal8(raw, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.PS2_RGB5551 => DecodePs2_RGB5551(raw, t.Width, t.Height),
             DicPixelFormat.PS2_RGBA8888 => DecodePs2_RGBA8888(raw, t.Width, t.Height),
+            DicPixelFormat.PSP_4bpp_swizzled => DecodePsp_Pal4(raw, GetPalette(t), t.Width, t.Height),
+            DicPixelFormat.PSP_8bpp_swizzled => DecodePsp_Pal8(raw, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.Wii_I8 => DecodeWii_I8(raw, t.Width, t.Height),
             DicPixelFormat.Wii_IA8 => DecodeWii_IA8(raw, t.Width, t.Height),
             DicPixelFormat.Wii_RGB5A3 => DecodeWii_RGB5A3(raw, t.Width, t.Height),
@@ -48,9 +51,12 @@ public static class DicCodec
             DicPixelFormat.Dip_B8G8R8A8 => EncodeDip_B8G8R8A8(rgba, t.Width, t.Height),
             DicPixelFormat.Dip_B5G6R5 => EncodeDip_B5G6R5(rgba, t.Width, t.Height),
             DicPixelFormat.Dip_B5G5R5A1 => EncodeDip_B5G5R5A1(rgba, t.Width, t.Height),
+            DicPixelFormat.PS2_4bpp_swizzled => EncodePs2_Pal4(rgba, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.PS2_8bpp_swizzled => EncodePs2_Pal8(rgba, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.PS2_RGB5551 => EncodePs2_RGB5551(rgba, t.Width, t.Height),
             DicPixelFormat.PS2_RGBA8888 => EncodePs2_RGBA8888(rgba, t.Width, t.Height),
+            DicPixelFormat.PSP_4bpp_swizzled => EncodePsp_Pal4(rgba, GetPalette(t), t.Width, t.Height),
+            DicPixelFormat.PSP_8bpp_swizzled => EncodePsp_Pal8(rgba, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.Wii_I8 => EncodeWii_I8(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_IA8 => EncodeWii_IA8(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_RGB5A3 => EncodeWii_RGB5A3(rgba, t.Width, t.Height),
@@ -256,13 +262,14 @@ public static class DicCodec
 
     private static int RemapClutIndex(int i) => (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);
 
-    private static (byte r, byte g, byte b, byte a)[] DecodePs2Palette(byte[] pal, int paletteSize)
+    private static (byte r, byte g, byte b, byte a)[] DecodePs2Palette(byte[] pal, int paletteSize, int colorCount = 256)
     {
+        colorCount = Math.Clamp(colorCount, 1, 256);
         var colors = new (byte r, byte g, byte b, byte a)[256];
-        bool isRgba8888 = paletteSize >= 1024;
+        bool isRgba8888 = paletteSize >= colorCount * 4;
         if (isRgba8888)
         {
-            int n = Math.Min(256, paletteSize / 4);
+            int n = Math.Min(colorCount, paletteSize / 4);
             for (int i = 0; i < n; i++)
             {
                 byte r = pal[i * 4 + 0], g = pal[i * 4 + 1], b = pal[i * 4 + 2], a = pal[i * 4 + 3];
@@ -271,7 +278,7 @@ public static class DicCodec
         }
         else // RGB5551 LE
         {
-            int n = Math.Min(256, paletteSize / 2);
+            int n = Math.Min(colorCount, paletteSize / 2);
             for (int i = 0; i < n; i++)
             {
                 int v = pal[i * 2] | (pal[i * 2 + 1] << 8);
@@ -282,10 +289,78 @@ public static class DicCodec
                 colors[i] = ((byte)r, (byte)g, (byte)b, (byte)a);
             }
         }
-        // CLUT remap
-        var fixedPal = new (byte r, byte g, byte b, byte a)[256];
-        for (int i = 0; i < 256; i++) fixedPal[RemapClutIndex(i)] = colors[i];
-        return fixedPal;
+        if (colorCount == 256)
+        {
+            // CLUT remap for 8bpp CSM1 palettes. 16-color PS2 palettes are
+            // already addressed directly by their low-nibble indices.
+            var fixedPal = new (byte r, byte g, byte b, byte a)[256];
+            for (int i = 0; i < 256; i++) fixedPal[RemapClutIndex(i)] = colors[i];
+            return fixedPal;
+        }
+        return colors;
+    }
+
+    private static byte[] Unpack4Bpp(byte[] raw, int pixelCount)
+    {
+        byte[] indices = new byte[pixelCount];
+        int di = 0;
+        for (int i = 0; i < raw.Length && di < pixelCount; i++)
+        {
+            byte v = raw[i];
+            indices[di++] = (byte)(v & 0x0F);
+            if (di < pixelCount) indices[di++] = (byte)(v >> 4);
+        }
+        return indices;
+    }
+
+    private static byte[] Pack4Bpp(byte[] indices)
+    {
+        byte[] raw = new byte[(indices.Length + 1) / 2];
+        for (int i = 0; i < indices.Length; i += 2)
+        {
+            int lo = indices[i] & 0x0F;
+            int hi = i + 1 < indices.Length ? (indices[i + 1] & 0x0F) : 0;
+            raw[i / 2] = (byte)(lo | (hi << 4));
+        }
+        return raw;
+    }
+
+    private static byte[] DecodePs2_Pal4(byte[] raw, byte[] pal, int w, int h)
+    {
+        byte[] packedIndices = Unpack4Bpp(raw, w * h);
+        byte[] indices = new byte[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int sid = Ps2SwizzleId8(x, y, w);
+                if (sid < packedIndices.Length) indices[y * w + x] = packedIndices[sid];
+            }
+
+        var palette = DecodePs2Palette(pal, pal.Length, 16);
+        byte[] o = new byte[w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            var c = palette[indices[i] & 0x0F];
+            o[i * 4 + 0] = c.b; o[i * 4 + 1] = c.g; o[i * 4 + 2] = c.r; o[i * 4 + 3] = c.a;
+        }
+        return o;
+    }
+
+    private static byte[] EncodePs2_Pal4(byte[] rgba, byte[] pal, int w, int h)
+    {
+        var palette = DecodePs2Palette(pal, pal.Length, 16);
+        byte[] indices = new byte[w * h];
+        for (int i = 0; i < w * h; i++)
+            indices[i] = (byte)NearestPs2PaletteIndex(rgba, i * 4, palette, 16);
+
+        byte[] swizzled = new byte[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int sid = Ps2SwizzleId8(x, y, w);
+                if (sid < swizzled.Length) swizzled[sid] = indices[y * w + x];
+            }
+        return Pack4Bpp(swizzled);
     }
 
     private static byte[] DecodePs2_Pal8(byte[] raw, byte[] pal, int w, int h)
@@ -314,16 +389,7 @@ public static class DicCodec
         byte[] indices = new byte[w * h];
         for (int i = 0; i < w * h; i++)
         {
-            byte r = rgba[i * 4], g = rgba[i * 4 + 1], b = rgba[i * 4 + 2], a = rgba[i * 4 + 3];
-            int best = 0, bestD = int.MaxValue;
-            for (int k = 0; k < 256; k++)
-            {
-                var c = palette[k];
-                int dr = r - c.r, dg = g - c.g, db = b - c.b, da = a - c.a;
-                int d = dr * dr + dg * dg + db * db + da * da * 2;
-                if (d < bestD) { bestD = d; best = k; }
-            }
-            indices[i] = (byte)best;
+            indices[i] = (byte)NearestPs2PaletteIndex(rgba, i * 4, palette, 256);
         }
         // Swizzle indices
         byte[] o = new byte[w * h];
@@ -334,6 +400,130 @@ public static class DicCodec
                 if (sid < o.Length) o[sid] = indices[y * w + x];
             }
         return o;
+    }
+
+    private static int NearestPs2PaletteIndex(byte[] rgba, int offset, (byte r, byte g, byte b, byte a)[] palette, int count)
+    {
+        byte r = rgba[offset], g = rgba[offset + 1], b = rgba[offset + 2], a = rgba[offset + 3];
+        int best = 0, bestD = int.MaxValue;
+        for (int k = 0; k < count; k++)
+        {
+            var c = palette[k];
+            int dr = r - c.r, dg = g - c.g, db = b - c.b, da = a - c.a;
+            int d = dr * dr + dg * dg + db * db + da * da * 2;
+            if (d < bestD) { bestD = d; best = k; }
+        }
+        return best;
+    }
+
+    // ==================================================================
+    // PSP formats
+    // ==================================================================
+    private static (byte r, byte g, byte b, byte a)[] DecodePspPalette(byte[] pal, int colorCount)
+    {
+        colorCount = Math.Clamp(colorCount, 1, 256);
+        var colors = new (byte r, byte g, byte b, byte a)[256];
+        int n = Math.Min(colorCount, pal.Length / 4);
+        for (int i = 0; i < n; i++)
+        {
+            colors[i] = (pal[i * 4 + 0], pal[i * 4 + 1], pal[i * 4 + 2], pal[i * 4 + 3]);
+        }
+        return colors;
+    }
+
+    private static byte[] DecodePsp_Pal4(byte[] raw, byte[] pal, int w, int h)
+    {
+        byte[] linearPacked = UnswizzlePsp(raw, w, h, 4);
+        byte[] indices = Unpack4Bpp(linearPacked, w * h);
+        var palette = DecodePspPalette(pal, 16);
+        byte[] o = new byte[w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            var c = palette[indices[i] & 0x0F];
+            o[i * 4 + 0] = c.b; o[i * 4 + 1] = c.g; o[i * 4 + 2] = c.r; o[i * 4 + 3] = c.a;
+        }
+        return o;
+    }
+
+    private static byte[] EncodePsp_Pal4(byte[] rgba, byte[] pal, int w, int h)
+    {
+        var palette = DecodePspPalette(pal, 16);
+        byte[] indices = new byte[w * h];
+        for (int i = 0; i < w * h; i++)
+            indices[i] = (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], palette, 16);
+
+        return SwizzlePsp(Pack4Bpp(indices), w, h, 4);
+    }
+
+    private static byte[] DecodePsp_Pal8(byte[] raw, byte[] pal, int w, int h)
+    {
+        byte[] indices = UnswizzlePsp(raw, w, h, 8);
+        var palette = DecodePspPalette(pal, 256);
+        byte[] o = new byte[w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            var c = palette[indices[i]];
+            o[i * 4 + 0] = c.b; o[i * 4 + 1] = c.g; o[i * 4 + 2] = c.r; o[i * 4 + 3] = c.a;
+        }
+        return o;
+    }
+
+    private static byte[] EncodePsp_Pal8(byte[] rgba, byte[] pal, int w, int h)
+    {
+        var palette = DecodePspPalette(pal, 256);
+        byte[] indices = new byte[w * h];
+        for (int i = 0; i < w * h; i++)
+            indices[i] = (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], palette, 256);
+
+        return SwizzlePsp(indices, w, h, 8);
+    }
+
+    private static byte[] UnswizzlePsp(byte[] raw, int w, int h, int bpp)
+    {
+        int stride = w * bpp / 8;
+        int paddedStride = (stride + 15) & ~15;
+        int rowBlocks = paddedStride / 16;
+        byte[] linear = new byte[stride * h];
+        int dst = 0;
+
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < stride; x++)
+            {
+                int blockX = x / 16;
+                int blockY = y / 8;
+                int blockIndex = blockX + blockY * rowBlocks;
+                int src = blockIndex * 16 * 8 + (x % 16) + (y % 8) * 16;
+                if (src < raw.Length) linear[dst] = raw[src];
+                dst++;
+            }
+
+        return linear;
+    }
+
+    private static byte[] SwizzlePsp(byte[] linear, int w, int h, int bpp)
+    {
+        int stride = w * bpp / 8;
+        int paddedStride = (stride + 15) & ~15;
+        int paddedHeight = (h + 7) & ~7;
+        int rowBlocks = paddedStride / 16;
+        byte[] swizzled = new byte[paddedStride * paddedHeight];
+
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < stride; x++)
+            {
+                int blockX = x / 16;
+                int blockY = y / 8;
+                int blockIndex = blockX + blockY * rowBlocks;
+                int dst = blockIndex * 16 * 8 + (x % 16) + (y % 8) * 16;
+                int src = y * stride + x;
+                if (src < linear.Length && dst < swizzled.Length) swizzled[dst] = linear[src];
+            }
+
+        int expectedSize = stride * h;
+        if (swizzled.Length == expectedSize) return swizzled;
+        byte[] trimmed = new byte[expectedSize];
+        Buffer.BlockCopy(swizzled, 0, trimmed, 0, Math.Min(trimmed.Length, swizzled.Length));
+        return trimmed;
     }
 
     private static byte[] DecodePs2_RGB5551(byte[] raw, int w, int h)

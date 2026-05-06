@@ -48,7 +48,7 @@ public static class FinalExamCodec
         {
             FxPixelFormat.BGRA => DecodeBgra(raw, file.Width, file.Height),
             FxPixelFormat.BGRX => DecodeBgrx(raw, file.Width, file.Height),
-            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => DecodeRgba(raw, file.Width, file.Height),
+            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => DecodePs3SwizzledRgba(raw, file.Width, file.Height),
             FxPixelFormat.ARGB => DecodeArgbBe(raw, file.Width, file.Height),
             FxPixelFormat.TXD1 => DecodeDxt1(raw, file.Width, file.Height),
             FxPixelFormat.TXD3 => DecodeDxt3(raw, file.Width, file.Height),
@@ -89,7 +89,7 @@ public static class FinalExamCodec
         {
             FxPixelFormat.BGRA => EncodeBgra(rgba, file.Width, file.Height),
             FxPixelFormat.BGRX => EncodeBgrx(rgba, file.Width, file.Height),
-            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => EncodeRgba(rgba, file.Width, file.Height),
+            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => EncodePs3SwizzledRgba(rgba, file.Width, file.Height),
             FxPixelFormat.ARGB => EncodeArgbBe(rgba, file.Width, file.Height),
             FxPixelFormat.TXD1 => EncodeDxt1(rgba, file.Width, file.Height),
             FxPixelFormat.TXD3 => EncodeDxt3(rgba, file.Width, file.Height),
@@ -178,6 +178,33 @@ public static class FinalExamCodec
             }
         }
         return o;
+    }
+
+    private static int MortonPart1(int v)
+    {
+        v &= 0x0000FFFF;
+        v = (v | (v << 8)) & 0x00FF00FF;
+        v = (v | (v << 4)) & 0x0F0F0F0F;
+        v = (v | (v << 2)) & 0x33333333;
+        v = (v | (v << 1)) & 0x55555555;
+        return v;
+    }
+
+    private static int MortonIndex(int x, int y) => MortonPart1(x) | (MortonPart1(y) << 1);
+
+    private static int MortonIndexRect(int x, int y, int width, int height)
+    {
+        if (width == height)
+            return MortonIndex(x, y);
+
+        if (width > height)
+        {
+            int block = x / height;
+            return block * height * height + MortonIndex(x % height, y);
+        }
+
+        int rowBlock = y / width;
+        return rowBlock * width * width + MortonIndex(x, y % width);
     }
 
     private static int X360TiledX(int blockOffset, int widthInBlocks, int texelBytePitch)
@@ -276,6 +303,42 @@ public static class FinalExamCodec
             o[i * 4 + 2] = rgba[i * 4 + 2]; // B
             o[i * 4 + 3] = rgba[i * 4 + 3]; // A
         }
+        return o;
+    }
+
+    private static byte[] DecodePs3SwizzledRgba(byte[] raw, int w, int h)
+    {
+        int n = w * h;
+        byte[] o = new byte[n * 4];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int src = MortonIndexRect(x, y, w, h) * 4;
+                int dst = (y * w + x) * 4;
+                if (src + 3 >= raw.Length) continue;
+                o[dst + 0] = raw[src + 2]; // B
+                o[dst + 1] = raw[src + 1]; // G
+                o[dst + 2] = raw[src + 0]; // R
+                o[dst + 3] = raw[src + 3]; // A
+            }
+        return o;
+    }
+
+    private static byte[] EncodePs3SwizzledRgba(byte[] rgba, int w, int h)
+    {
+        int n = w * h;
+        byte[] o = new byte[n * 4];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int src = (y * w + x) * 4;
+                int dst = MortonIndexRect(x, y, w, h) * 4;
+                if (dst + 3 >= o.Length) continue;
+                o[dst + 0] = rgba[src + 0]; // R
+                o[dst + 1] = rgba[src + 1]; // G
+                o[dst + 2] = rgba[src + 2]; // B
+                o[dst + 3] = rgba[src + 3]; // A
+            }
         return o;
     }
 

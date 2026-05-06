@@ -5,7 +5,7 @@ using System.Text;
 
 namespace HVTTool;
 
-public enum DicVariant { Unknown, PC, PcDip, PS2, Wii }
+public enum DicVariant { Unknown, PC, PcDip, PS2, PSP, Wii }
 
 public enum DicPixelFormat
 {
@@ -18,8 +18,12 @@ public enum DicPixelFormat
     Dip_B5G5R5A1,   // 25
     // PS2 (RenderWare TXD)
     PS2_8bpp_swizzled,
+    PS2_4bpp_swizzled,
     PS2_RGB5551,
     PS2_RGBA8888,
+    // PSP Obscure 2 indexed textures
+    PSP_8bpp_swizzled,
+    PSP_4bpp_swizzled,
     // Wii (custom GX)
     Wii_I8,
     Wii_IA8,
@@ -70,6 +74,7 @@ public sealed class DicFile
         switch (Variant)
         {
             case DicVariant.PS2: ParsePs2(); break;
+            case DicVariant.PSP: ParsePsp(); break;
             case DicVariant.Wii: ParseWii(); break;
             case DicVariant.PC: ParsePc(); break;
             case DicVariant.PcDip: ParseDip(); break;
@@ -88,6 +93,7 @@ public sealed class DicFile
         // PS2 RenderWare: first chunk_id (LE u32) = 0x16 (RW_TEXTURE_DICTIONARY)
         int id = BitConverter.ToInt32(d, 0);
         if (id == 0x16) return DicVariant.PS2;
+        if (LooksLikePspDic(d)) return DicVariant.PSP;
         // Wii: first u32 BE = small count (1..1024) and the 8th byte starts a printable name length 1..48
         if (d.Length > 64)
         {
@@ -111,6 +117,32 @@ public sealed class DicFile
             if (countBe > 0 && countBe < 4096) return DicVariant.PC;
         }
         return DicVariant.Unknown;
+    }
+
+    private static bool LooksLikePspDic(byte[] d)
+    {
+        if (d.Length < 32) return false;
+        int count = BitConverter.ToInt32(d, 0);
+        if (count <= 0 || count > 4096) return false;
+
+        int nameLen = BitConverter.ToInt32(d, 4);
+        if (nameLen < 1 || nameLen > 96) return false;
+        if (8 + nameLen + 16 > d.Length) return false;
+        if (!IsPrintableAsciiName(d, 8, nameLen)) return false;
+
+        int p = 8 + nameLen;
+        int width = BitConverter.ToUInt16(d, p);
+        int height = BitConverter.ToUInt16(d, p + 2);
+        int paletteEntries = BitConverter.ToUInt16(d, p + 4);
+        int bpp = d[p + 6];
+        int paletteSize = BitConverter.ToInt32(d, p + 12);
+        if ((bpp != 4 && bpp != 8) || paletteEntries != (1 << bpp)) return false;
+        if (paletteSize != paletteEntries * 4) return false;
+        if (!IsPow2_4to2048(width) || !IsPow2_4to2048(height)) return false;
+
+        int imageSize = (width * height * bpp + 7) / 8;
+        int imageOffset = p + 16 + paletteSize;
+        return imageOffset + imageSize <= d.Length;
     }
 
     // ==================================================================
@@ -169,12 +201,24 @@ public sealed class DicFile
             int palettePacketSize = BitConverter.ToInt32(Data, blobOffset + 0x40);
 
             int imageOffset = blobOffset + 0xA8;
-            int imageSize = bpp == 8 ? width * height : width * height * (bpp / 8);
+            int imageSize = bpp switch
+            {
+                4 => (width * height + 1) / 2,
+                8 => width * height,
+                _ => width * height * (bpp / 8)
+            };
             int paletteOffset = palettePacketSize > 0 ? blobOffset + 0x50 + imagePacketSize + 0x58 : -1;
-            int paletteSize = palettePacketSize >= 0x450 ? 1024 : (palettePacketSize > 0 ? 512 : 0);
+            int paletteSize = bpp switch
+            {
+                4 when palettePacketSize > 0 => 16 * 4,
+                8 when palettePacketSize >= 0x450 => 256 * 4,
+                8 when palettePacketSize > 0 => 256 * 2,
+                _ => 0
+            };
 
             DicPixelFormat fmt = bpp switch
             {
+                4 => DicPixelFormat.PS2_4bpp_swizzled,
                 8 => DicPixelFormat.PS2_8bpp_swizzled,
                 16 => DicPixelFormat.PS2_RGB5551,
                 32 => DicPixelFormat.PS2_RGBA8888,
@@ -182,6 +226,7 @@ public sealed class DicFile
             };
             string label = bpp switch
             {
+                4 => $"PS2 PAL4 ({(paletteSize >= 64 ? "RGBA8888 pal" : "RGB5551 pal")})",
                 8 => $"PS2 PAL8 ({(paletteSize >= 1024 ? "RGBA8888 pal" : "RGB5551 pal")})",
                 16 => "PS2 RGB5551",
                 32 => "PS2 RGBA8888",
@@ -199,12 +244,79 @@ public sealed class DicFile
                 FormatLabel = label,
                 ImageOffset = imageOffset,
                 ImageSize = imageSize,
-                PaletteOffset = bpp == 8 ? paletteOffset : -1,
-                PaletteSize = bpp == 8 ? paletteSize : 0,
+                PaletteOffset = bpp == 4 || bpp == 8 ? paletteOffset : -1,
+                PaletteSize = bpp == 4 || bpp == 8 ? paletteSize : 0,
                 Platform = "PS2",
                 Owner = this
             });
             index++;
+        }
+    }
+
+    // ==================================================================
+    // PSP parser - Obscure 2 custom indexed texture dictionary
+    // ==================================================================
+    private void ParsePsp()
+    {
+        int count = BitConverter.ToInt32(Data, 0);
+        int offset = 4;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (offset + 4 > Data.Length)
+                throw new InvalidDataException($"PSP: unexpected end before entry {i}.");
+
+            int nameLen = BitConverter.ToInt32(Data, offset);
+            offset += 4;
+            if (nameLen < 1 || nameLen > 256 || offset + nameLen + 16 > Data.Length)
+                throw new InvalidDataException($"PSP: invalid name length at entry {i}.");
+
+            string name = Encoding.ASCII.GetString(Data, offset, nameLen);
+            offset += nameLen;
+
+            int width = BitConverter.ToUInt16(Data, offset);
+            int height = BitConverter.ToUInt16(Data, offset + 2);
+            int paletteEntries = BitConverter.ToUInt16(Data, offset + 4);
+            int bpp = Data[offset + 6];
+            int paletteSize = BitConverter.ToInt32(Data, offset + 12);
+
+            if ((bpp != 4 && bpp != 8) || paletteEntries != (1 << bpp) || paletteSize != paletteEntries * 4)
+                throw new NotSupportedException($"PSP entry {name}: bpp {bpp}, palette entries {paletteEntries}, palette size {paletteSize} not supported");
+
+            int paletteOffset = offset + 16;
+            int imageOffset = paletteOffset + paletteSize + 4;
+            int imageSize = (width * height * bpp + 7) / 8;
+            if (imageOffset + imageSize > Data.Length)
+                throw new InvalidDataException($"PSP: texture {name} data exceeds file size.");
+
+            DicPixelFormat fmt = bpp switch
+            {
+                4 => DicPixelFormat.PSP_4bpp_swizzled,
+                8 => DicPixelFormat.PSP_8bpp_swizzled,
+                _ => throw new NotSupportedException($"PSP bpp {bpp} not supported")
+            };
+
+            Textures.Add(new DicTexture
+            {
+                Index = i,
+                Name = name,
+                Width = width,
+                Height = height,
+                Bpp = bpp,
+                Format = fmt,
+                FormatLabel = $"PSP PAL{bpp} (RGBA8888 pal)",
+                ImageOffset = imageOffset,
+                ImageSize = imageSize,
+                PaletteOffset = paletteOffset,
+                PaletteSize = paletteSize,
+                Platform = "PSP",
+                Owner = this
+            });
+
+            // PSP entries carry a 4-byte pad between the palette and indexed
+            // payload. Reinsert only replaces ImageSize, so the pad remains
+            // intact and the next entry stays aligned.
+            offset = imageOffset + imageSize;
         }
     }
 
@@ -311,6 +423,20 @@ public sealed class DicFile
     private static bool IsPow2_4to1024(int v) =>
         v == 4 || v == 8 || v == 16 || v == 32 || v == 64 || v == 128 || v == 256 || v == 512 || v == 1024;
 
+    private static bool IsPow2_4to2048(int v) =>
+        v == 4 || v == 8 || v == 16 || v == 32 || v == 64 || v == 128 || v == 256 || v == 512 || v == 1024 || v == 2048;
+
+    private static bool IsPrintableAsciiName(byte[] data, int offset, int length)
+    {
+        if (offset < 0 || length < 1 || offset + length > data.Length) return false;
+        for (int i = 0; i < length; i++)
+        {
+            byte c = data[offset + i];
+            if (c < 32 || c >= 127) return false;
+        }
+        return true;
+    }
+
     // ==================================================================
     // PC parser — TexDict.py
     // ==================================================================
@@ -322,7 +448,7 @@ public sealed class DicFile
         {
             offset += 4; // skip 4 bytes
             int nameLen = ReadBeU32(Data, offset); offset += 4;
-            string name = Encoding.GetEncoding("Shift_JIS").GetString(Data, offset, nameLen);
+            string name = DecodePcTextureName(Data, offset, nameLen);
             offset += nameLen;
             int mipmaps = ReadBeU32(Data, offset); offset += 4;
             int alphaFlag = ReadBeU32(Data, offset); offset += 4;
@@ -458,6 +584,21 @@ public sealed class DicFile
     // ==================================================================
     private static int ReadBeU32(byte[] d, int off) =>
         (d[off] << 24) | (d[off + 1] << 16) | (d[off + 2] << 8) | d[off + 3];
+
+    private static string DecodePcTextureName(byte[] data, int offset, int length)
+    {
+        try
+        {
+            return Encoding.GetEncoding("Shift_JIS").GetString(data, offset, length);
+        }
+        catch (ArgumentException)
+        {
+            // .NET 5+ does not enable legacy code pages by default. Obscure 2
+            // PC names seen so far are ASCII-compatible, so this keeps loading
+            // working without depending on machine-global encoding providers.
+            return Encoding.Latin1.GetString(data, offset, length);
+        }
+    }
 
     private struct Chunk { public int Offset; public int Id; public int Size; public int Version; public int BodyStart; public int BodyEnd; }
     private static IEnumerable<Chunk> IterChunks(byte[] data, int start, int end)

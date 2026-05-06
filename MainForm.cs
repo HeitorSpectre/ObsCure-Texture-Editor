@@ -48,7 +48,7 @@ public sealed class MainForm : Form
 
     public MainForm(string? initialPath)
     {
-        Text = "ObsCure Texture Editor — PC/PS2/PS3/Wii/Xbox";
+        Text = "ObsCure Texture Editor - PC/PS2/PSP/PS3/Wii/Xbox";
         Width = 1200;
         Height = 800;
         StartPosition = FormStartPosition.CenterScreen;
@@ -261,7 +261,15 @@ public sealed class MainForm : Form
 
     private void PopulateTreeNode(TreeNode parent, string folder)
     {
-        foreach (var dir in Directory.EnumerateDirectories(folder).OrderBy(d => d))
+        var visibleTextureStems = Directory.EnumerateFiles(folder)
+            .Where(IsSupported)
+            .Select(Path.GetFileNameWithoutExtension)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in Directory.EnumerateDirectories(folder)
+            .Where(d => !visibleTextureStems.Contains(Path.GetFileName(d)))
+            .OrderBy(d => d))
         {
             var dirNode = new TreeNode(Path.GetFileName(dir)) { Tag = dir, ImageKey = "folder" };
             parent.Nodes.Add(dirNode);
@@ -1088,7 +1096,7 @@ public sealed class MainForm : Form
         };
         var subtitleLabel = new Label
         {
-            Text = "PC / PS2 / PS3 / Wii / Xbox texture extractor & reinserter",
+            Text = "PC / PS2 / PSP / PS3 / Wii / Xbox texture extractor / reinserter",
             Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
             ForeColor = Color.DimGray,
             AutoSize = false,
@@ -1120,49 +1128,82 @@ public sealed class MainForm : Form
             "─────  SUPPORTED FORMATS / PLATFORMS  ─────",
             "",
             "  Containers",
-            "    .hvt  —  Nintendo Wii / GameCube standalone texture",
-            "    .hvt  —  Final Exam PC / PS3 / Xbox 360 (HydraVision modern) standalone",
-            "    .hvi  —  PlayStation 2 standalone paletted texture",
-            "    .dic  —  Texture dictionary (PC, PS2 RenderWare, Wii GX)",
-            "    .dip  —  PC ObsCure 1 texture dictionary (HydraVision)",
-            "    .xbr  —  Xbox classic texture dictionary (NV2A swizzled)",
+            "    .dic  —  Obscure / Obscure 2 texture dictionary (PC / PS2 / PSP / Wii)",
+            "    .dip  —  Obscure 1 (PC)",
+            "    .hvi  —  Obscure 1 / Obscure 2 (PS2)",
+            "    .hvt  —  Obscure 2 (Wii)",
+            "    .hvt  —  Final Exam (PC / PS3 / Xbox 360)",
+            "    .xbr  —  Obscure 1 (Xbox)",
             "",
-            "  PC pixel formats (.dic)",
-            "    R8G8B8A8  (32 bpp)",
-            "    R5G6B5    (16 bpp)",
-            "    R5G5B5A1  (16 bpp)",
+            "  PC .dic",
+            "    R8G8B8A8 (32 bpp)",
+            "    R5G6B5 (16 bpp)",
+            "    R5G5B5A1 (16 bpp)",
             "",
-            "  PC pixel formats (.dip)",
-            "    B8G8R8A8  (32 bpp)",
-            "    B5G6R5    (16 bpp)",
-            "    B5G5R5A1  (16 bpp)",
+            "  PC .dip",
+            "    B8G8R8A8 (32 bpp)",
+            "    B5G6R5 (16 bpp)",
+            "    B5G5R5A1 (16 bpp)",
             "",
-            "  PS2 pixel formats",
-            "    PAL8  (8 bpp swizzled, RGB5551 or RGBA8888 palette)",
-            "    RGB5551   (16 bpp, little-endian)",
-            "    RGBA8888  (32 bpp, PS2 alpha 0..128)",
+            "  PS2 .dic",
+            "    PAL4 (4 bpp) (swizzled) (RGBA8888 palette)",
+            "    PAL8 (8 bpp) (swizzled) (RGB5551 or RGBA8888 palette)",
+            "    RGB5551 (16 bpp) (little-endian)",
+            "    RGBA8888 (32 bpp) (PS2 alpha range)",
             "",
-            "  Xbox classic pixel formats (.xbr, NV2A swizzled)",
-            "    SZ_R5G6B5    (16 bpp, Morton-order swizzle)",
-            "    SZ_A1R5G5B5  (16 bpp, Morton-order swizzle)",
-            "    SZ_A8R8G8B8  (32 bpp, Morton-order swizzle)",
+            "  PSP .dic",
+            "    GU_PSM_T4 / PAL4 (4 bpp indexed)",
+            "    GU_PSM_T8 / PAL8 (8 bpp indexed)",
+            "    RGBA8888 CLUT / palette",
+            "    PSP swizzled indexed payload (4-byte palette padding)",
             "",
-            "  Nintendo Wii / GameCube pixel formats",
-            "    I8        (8 bpp grayscale, GX 8x4 tiles)",
-            "    IA8       (16 bpp grayscale + alpha, 4x4 tiles)",
-            "    RGB5A3    (16 bpp, 4x4 tiles)",
-            "    RGBA8     (32 bpp, 4x4 AR/GB interleaved)",
-            "    C4 / C8   (4/8 bpp paletted with TLUT)",
-            "    CMPR      (4 bpp DXT1-style, PCA-quantized encoder)",
+            "  Wii .dic",
+            "    I8 (8 bpp grayscale)",
+            "    IA8 (16 bpp grayscale + alpha)",
+            "    RGB5A3 (16 bpp)",
+            "    RGBA8 (32 bpp AR/GB interleaved)",
+            "    C4 / C8 (4/8 bpp paletted with TLUT)",
+            "    CMPR (4 bpp DXT1-style compression)",
             "",
-            "  Final Exam pixel formats (.hvt, PC \"HVI \" / PS3+X360 \" IVH\")",
-            "    BGRA      (PC, 32 bpp linear)",
-            "    BGRX      (PC, 32 bpp linear, alpha forced opaque)",
-            "    TXD1/DXT1 (PC+PS3, BC1, 4 bpp)",
-            "    TXD3/DXT3 (PC+PS3, BC2, 8 bpp)",
-            "    TXD5/DXT5 (PC+PS3, BC3, 8 bpp)",
-            "    ARGB      (PS3 RGBA linear / X360 32 bpp 32×32 tiled)",
-            "    PS3+X360 headers are big-endian; BC blocks stay as PC LE.",
+            "  Standalone Texture Files",
+            "",
+            "  PS2 .hvi",
+            "    PAL8 (8 bpp indexed texture with RGBA palette)",
+            "",
+            "  Wii .hvt",
+            "    I8",
+            "    IA8",
+            "    RGB5A3",
+            "    RGBA8",
+            "    C4",
+            "    C8",
+            "    CMPR",
+            "",
+            "  Xbox .xbr",
+            "    SZ_R5G6B5 (16 bpp) (Morton-order swizzled)",
+            "    SZ_A1R5G5B5 (16 bpp) (Morton-order swizzled)",
+            "    SZ_A8R8G8B8 (32 bpp) (Morton-order swizzled)",
+            "",
+            "  Final Exam .hvt",
+            "",
+            "  PC",
+            "    BGRA (32 bpp linear)",
+            "    BGRX (32 bpp linear) (alpha forced opaque)",
+            "    DXT1 / TXD1 (BC1 compression)",
+            "    DXT3 / TXD3 (BC2 compression)",
+            "    DXT5 / TXD5 (BC3 compression)",
+            "",
+            "  PS3",
+            "    ARGB (32 bpp swizzled)",
+            "    DXT1 / TXD1 (BC1 compression)",
+            "    DXT3 / TXD3 (BC2 compression)",
+            "    DXT5 / TXD5 (BC3 compression)",
+            "",
+            "  Xbox 360",
+            "    ARGB (32 bpp tiled)",
+            "    DXT1 / TXD1 (tiled BC1 compression)",
+            "    DXT3 / TXD3 (tiled BC2 compression)",
+            "    DXT5 / TXD5 (tiled BC3 compression)",
         });
 
         var okBtn = new Button
