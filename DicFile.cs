@@ -24,6 +24,7 @@ public enum DicPixelFormat
     // PSP Obscure 2 indexed textures
     PSP_8bpp_swizzled,
     PSP_4bpp_swizzled,
+    PSP_RGBA8888,
     // Wii (custom GX)
     Wii_I8,
     Wii_IA8,
@@ -136,12 +137,23 @@ public sealed class DicFile
         int paletteEntries = BitConverter.ToUInt16(d, p + 4);
         int bpp = d[p + 6];
         int paletteSize = BitConverter.ToInt32(d, p + 12);
-        if ((bpp != 4 && bpp != 8) || paletteEntries != (1 << bpp)) return false;
-        if (paletteSize != paletteEntries * 4) return false;
         if (!IsPow2_4to2048(width) || !IsPow2_4to2048(height)) return false;
 
-        int imageSize = (width * height * bpp + 7) / 8;
-        int imageOffset = p + 16 + paletteSize;
+        int imageSize;
+        int imageOffset;
+        if (bpp == 32)
+        {
+            if (paletteEntries != 0 || paletteSize != 0) return false;
+            imageSize = width * height * 4;
+            imageOffset = p + 20;
+        }
+        else
+        {
+            if ((bpp != 4 && bpp != 8) || paletteEntries != (1 << bpp)) return false;
+            if (paletteSize != paletteEntries * 4) return false;
+            imageSize = (width * height * bpp + 7) / 8;
+            imageOffset = p + 16 + paletteSize + 4;
+        }
         return imageOffset + imageSize <= d.Length;
     }
 
@@ -280,12 +292,25 @@ public sealed class DicFile
             int bpp = Data[offset + 6];
             int paletteSize = BitConverter.ToInt32(Data, offset + 12);
 
-            if ((bpp != 4 && bpp != 8) || paletteEntries != (1 << bpp) || paletteSize != paletteEntries * 4)
-                throw new NotSupportedException($"PSP entry {name}: bpp {bpp}, palette entries {paletteEntries}, palette size {paletteSize} not supported");
-
-            int paletteOffset = offset + 16;
-            int imageOffset = paletteOffset + paletteSize + 4;
-            int imageSize = (width * height * bpp + 7) / 8;
+            int paletteOffset;
+            int imageOffset;
+            int imageSize;
+            if (bpp == 32)
+            {
+                if (paletteEntries != 0 || paletteSize != 0)
+                    throw new NotSupportedException($"PSP entry {name}: 32bpp texture has unexpected palette metadata.");
+                paletteOffset = -1;
+                imageOffset = offset + 20;
+                imageSize = width * height * 4;
+            }
+            else
+            {
+                if ((bpp != 4 && bpp != 8) || paletteEntries != (1 << bpp) || paletteSize != paletteEntries * 4)
+                    throw new NotSupportedException($"PSP entry {name}: bpp {bpp}, palette entries {paletteEntries}, palette size {paletteSize} not supported");
+                paletteOffset = offset + 16;
+                imageOffset = paletteOffset + paletteSize + 4;
+                imageSize = (width * height * bpp + 7) / 8;
+            }
             if (imageOffset + imageSize > Data.Length)
                 throw new InvalidDataException($"PSP: texture {name} data exceeds file size.");
 
@@ -293,6 +318,7 @@ public sealed class DicFile
             {
                 4 => DicPixelFormat.PSP_4bpp_swizzled,
                 8 => DicPixelFormat.PSP_8bpp_swizzled,
+                32 => DicPixelFormat.PSP_RGBA8888,
                 _ => throw new NotSupportedException($"PSP bpp {bpp} not supported")
             };
 
@@ -304,11 +330,11 @@ public sealed class DicFile
                 Height = height,
                 Bpp = bpp,
                 Format = fmt,
-                FormatLabel = $"PSP PAL{bpp} (RGBA8888 pal)",
+                FormatLabel = bpp == 32 ? "PSP RGBA8888" : $"PSP PAL{bpp} (RGBA8888 pal)",
                 ImageOffset = imageOffset,
                 ImageSize = imageSize,
                 PaletteOffset = paletteOffset,
-                PaletteSize = paletteSize,
+                PaletteSize = bpp == 32 ? 0 : paletteSize,
                 Platform = "PSP",
                 Owner = this
             });

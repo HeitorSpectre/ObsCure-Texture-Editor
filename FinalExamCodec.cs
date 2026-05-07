@@ -48,7 +48,7 @@ public static class FinalExamCodec
         {
             FxPixelFormat.BGRA => DecodeBgra(raw, file.Width, file.Height),
             FxPixelFormat.BGRX => DecodeBgrx(raw, file.Width, file.Height),
-            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => DecodePs3SwizzledRgba(raw, file.Width, file.Height),
+            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => DecodePs3Argb(file, raw),
             FxPixelFormat.ARGB => DecodeArgbBe(raw, file.Width, file.Height),
             FxPixelFormat.TXD1 => DecodeDxt1(raw, file.Width, file.Height),
             FxPixelFormat.TXD3 => DecodeDxt3(raw, file.Width, file.Height),
@@ -89,7 +89,7 @@ public static class FinalExamCodec
         {
             FxPixelFormat.BGRA => EncodeBgra(rgba, file.Width, file.Height),
             FxPixelFormat.BGRX => EncodeBgrx(rgba, file.Width, file.Height),
-            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => EncodePs3SwizzledRgba(rgba, file.Width, file.Height),
+            FxPixelFormat.ARGB when file.Platform == FxPlatform.PS3 => EncodePs3Argb(file, rgba),
             FxPixelFormat.ARGB => EncodeArgbBe(rgba, file.Width, file.Height),
             FxPixelFormat.TXD1 => EncodeDxt1(rgba, file.Width, file.Height),
             FxPixelFormat.TXD3 => EncodeDxt3(rgba, file.Width, file.Height),
@@ -207,6 +207,30 @@ public static class FinalExamCodec
         return rowBlock * width * width + MortonIndex(x, y % width);
     }
 
+    private static int SwizzleOffset(int x, int y, int width, int height)
+    {
+        int offset = 0;
+        int xs = 0;
+        int ys = 0;
+        int dest = 0;
+        while ((1 << xs) < width || (1 << ys) < height)
+        {
+            if ((1 << xs) < width)
+            {
+                offset |= ((x >> xs) & 1) << dest;
+                xs++;
+                dest++;
+            }
+            if ((1 << ys) < height)
+            {
+                offset |= ((y >> ys) & 1) << dest;
+                ys++;
+                dest++;
+            }
+        }
+        return offset;
+    }
+
     private static int X360TiledX(int blockOffset, int widthInBlocks, int texelBytePitch)
     {
         int alignedWidth = (widthInBlocks + 31) & ~31;
@@ -292,6 +316,27 @@ public static class FinalExamCodec
         return o;
     }
 
+    private static byte[] DecodePs3Argb(FinalExamHvt file, byte[] raw)
+    {
+        return Ps3ArgbIsSwizzled(file)
+            ? DecodePs3SwizzledRgba(raw, file.Width, file.Height)
+            : DecodeRgba(raw, file.Width, file.Height);
+    }
+
+    private static byte[] EncodePs3Argb(FinalExamHvt file, byte[] rgba)
+    {
+        return Ps3ArgbIsSwizzled(file)
+            ? EncodePs3SwizzledRgba(rgba, file.Width, file.Height)
+            : EncodeRgba(rgba, file.Width, file.Height);
+    }
+
+    private static bool Ps3ArgbIsSwizzled(FinalExamHvt file)
+    {
+        // Final Exam stores single-mip PS3 ARGB UI atlases linearly, while
+        // mipmapped ARGB textures use the PS3 swizzled layout.
+        return file.MipmapCount > 1;
+    }
+
     private static byte[] EncodeRgba(byte[] rgba, int w, int h)
     {
         int n = w * h;
@@ -313,7 +358,7 @@ public static class FinalExamCodec
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++)
             {
-                int src = MortonIndexRect(x, y, w, h) * 4;
+                int src = SwizzleOffset(x, y, w, h) * 4;
                 int dst = (y * w + x) * 4;
                 if (src + 3 >= raw.Length) continue;
                 o[dst + 0] = raw[src + 2]; // B
@@ -332,7 +377,7 @@ public static class FinalExamCodec
             for (int x = 0; x < w; x++)
             {
                 int src = (y * w + x) * 4;
-                int dst = MortonIndexRect(x, y, w, h) * 4;
+                int dst = SwizzleOffset(x, y, w, h) * 4;
                 if (dst + 3 >= o.Length) continue;
                 o[dst + 0] = rgba[src + 0]; // R
                 o[dst + 1] = rgba[src + 1]; // G

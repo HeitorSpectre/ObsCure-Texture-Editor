@@ -30,6 +30,7 @@ public static class DicCodec
             DicPixelFormat.PS2_RGBA8888 => DecodePs2_RGBA8888(raw, t.Width, t.Height),
             DicPixelFormat.PSP_4bpp_swizzled => DecodePsp_Pal4(raw, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.PSP_8bpp_swizzled => DecodePsp_Pal8(raw, GetPalette(t), t.Width, t.Height),
+            DicPixelFormat.PSP_RGBA8888 => DecodePsp_Rgba8888(raw, t.Width, t.Height),
             DicPixelFormat.Wii_I8 => DecodeWii_I8(raw, t.Width, t.Height),
             DicPixelFormat.Wii_IA8 => DecodeWii_IA8(raw, t.Width, t.Height),
             DicPixelFormat.Wii_RGB5A3 => DecodeWii_RGB5A3(raw, t.Width, t.Height),
@@ -57,6 +58,7 @@ public static class DicCodec
             DicPixelFormat.PS2_RGBA8888 => EncodePs2_RGBA8888(rgba, t.Width, t.Height),
             DicPixelFormat.PSP_4bpp_swizzled => EncodePsp_Pal4(rgba, GetPalette(t), t.Width, t.Height),
             DicPixelFormat.PSP_8bpp_swizzled => EncodePsp_Pal8(rgba, GetPalette(t), t.Width, t.Height),
+            DicPixelFormat.PSP_RGBA8888 => EncodePsp_Rgba8888(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_I8 => EncodeWii_I8(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_IA8 => EncodeWii_IA8(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_RGB5A3 => EncodeWii_RGB5A3(rgba, t.Width, t.Height),
@@ -476,6 +478,33 @@ public static class DicCodec
             indices[i] = (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], palette, 256);
 
         return SwizzlePsp(indices, w, h, 8);
+    }
+
+    private static byte[] DecodePsp_Rgba8888(byte[] raw, int w, int h)
+    {
+        byte[] o = new byte[w * h * 4];
+        int n = Math.Min(w * h, raw.Length / 4);
+        for (int i = 0; i < n; i++)
+        {
+            o[i * 4 + 0] = raw[i * 4 + 2];
+            o[i * 4 + 1] = raw[i * 4 + 1];
+            o[i * 4 + 2] = raw[i * 4 + 0];
+            o[i * 4 + 3] = raw[i * 4 + 3];
+        }
+        return o;
+    }
+
+    private static byte[] EncodePsp_Rgba8888(byte[] rgba, int w, int h)
+    {
+        byte[] o = new byte[w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            o[i * 4 + 0] = rgba[i * 4 + 0];
+            o[i * 4 + 1] = rgba[i * 4 + 1];
+            o[i * 4 + 2] = rgba[i * 4 + 2];
+            o[i * 4 + 3] = rgba[i * 4 + 3];
+        }
+        return o;
     }
 
     private static byte[] UnswizzlePsp(byte[] raw, int w, int h, int bpp)

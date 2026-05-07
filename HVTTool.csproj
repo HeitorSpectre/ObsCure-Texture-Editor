@@ -1,20 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <TargetFrameworks>net9.0;net9.0-windows</TargetFrameworks>
+    <OutputType Condition="'$(TargetFramework)' == 'net9.0'">Exe</OutputType>
+    <OutputType Condition="'$(TargetFramework)' == 'net9.0-windows'">WinExe</OutputType>
     <Nullable>enable</Nullable>
-    <UseWindowsForms>true</UseWindowsForms>
+    <UseWindowsForms Condition="'$(TargetFramework)' == 'net9.0-windows'">true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>ObsCureTextureEditor</AssemblyName>
+    <AssemblyName Condition="'$(TargetFramework)' == 'net9.0'">ObsCure Texture Editor CLI</AssemblyName>
+    <AssemblyName Condition="'$(TargetFramework)' == 'net9.0-windows'">ObsCureTextureEditor</AssemblyName>
     <Product>ObsCure Texture Editor PC/PS2/PS3/Wii/Xbox</Product>
     <AssemblyTitle>ObsCure Texture Editor PC/PS2/PS3/Wii/Xbox</AssemblyTitle>
+    <DefineConstants Condition="'$(TargetFramework)' == 'net9.0-windows'">$(DefineConstants);HVTTOOL_GUI</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Remove="Tests/**" />
     <None Remove="Tests/**" />
     <EmbeddedResource Remove="Tests/**" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <Compile Remove="BatchProgressDialog.cs" />
+    <Compile Remove="MainForm.cs" />
   </ItemGroup>
 
 </Project>
