@@ -482,29 +482,30 @@ public static class DicCodec
 
     private static byte[] DecodePsp_Rgba8888(byte[] raw, int w, int h)
     {
+        byte[] linear = UnswizzlePsp(raw, w, h, 32);
         byte[] o = new byte[w * h * 4];
-        int n = Math.Min(w * h, raw.Length / 4);
+        int n = Math.Min(w * h, linear.Length / 4);
         for (int i = 0; i < n; i++)
         {
-            o[i * 4 + 0] = raw[i * 4 + 2];
-            o[i * 4 + 1] = raw[i * 4 + 1];
-            o[i * 4 + 2] = raw[i * 4 + 0];
-            o[i * 4 + 3] = raw[i * 4 + 3];
+            o[i * 4 + 0] = linear[i * 4 + 2];
+            o[i * 4 + 1] = linear[i * 4 + 1];
+            o[i * 4 + 2] = linear[i * 4 + 0];
+            o[i * 4 + 3] = linear[i * 4 + 3];
         }
         return o;
     }
 
     private static byte[] EncodePsp_Rgba8888(byte[] rgba, int w, int h)
     {
-        byte[] o = new byte[w * h * 4];
+        byte[] linear = new byte[w * h * 4];
         for (int i = 0; i < w * h; i++)
         {
-            o[i * 4 + 0] = rgba[i * 4 + 0];
-            o[i * 4 + 1] = rgba[i * 4 + 1];
-            o[i * 4 + 2] = rgba[i * 4 + 2];
-            o[i * 4 + 3] = rgba[i * 4 + 3];
+            linear[i * 4 + 0] = rgba[i * 4 + 0];
+            linear[i * 4 + 1] = rgba[i * 4 + 1];
+            linear[i * 4 + 2] = rgba[i * 4 + 2];
+            linear[i * 4 + 3] = rgba[i * 4 + 3];
         }
-        return o;
+        return SwizzlePsp(linear, w, h, 32);
     }
 
     private static byte[] UnswizzlePsp(byte[] raw, int w, int h, int bpp)
