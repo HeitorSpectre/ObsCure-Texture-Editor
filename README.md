@@ -24,7 +24,7 @@ ObsCure Texture Editor is a tool for editing textures from this franchise, desig
 
 ## SUPPORTED FORMATS / PLATFORMS
 
-### Containers
+### FORMATS
 - `.dic` — Obscure / Obscure 2 texture dictionary (PC / PS2 / PSP / Wii)
 - `.dip` — Obscure 1 (PC)
 - `.hvi` — Obscure 1 / Obscure 2 (PS2)
