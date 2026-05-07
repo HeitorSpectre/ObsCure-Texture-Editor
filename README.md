@@ -32,6 +32,8 @@ ObsCure Texture Editor is a tool for editing textures from this franchise, desig
 - `.hvt` — Final Exam (PC / PS3 / Xbox 360)
 - `.xbr` — Obscure 1 (Xbox)
 
+### Containers
+
 #### PC `.dic`
 - R8G8B8A8 (32 bpp)
 - R5G6B5 (16 bpp)
