@@ -52,8 +52,8 @@ public static class DicCodec
             DicPixelFormat.Dip_B8G8R8A8 => EncodeDip_B8G8R8A8(rgba, t.Width, t.Height),
             DicPixelFormat.Dip_B5G6R5 => EncodeDip_B5G6R5(rgba, t.Width, t.Height),
             DicPixelFormat.Dip_B5G5R5A1 => EncodeDip_B5G5R5A1(rgba, t.Width, t.Height),
-            DicPixelFormat.PS2_4bpp_swizzled => EncodePs2_Pal4(rgba, GetPalette(t), t.Width, t.Height),
-            DicPixelFormat.PS2_8bpp_swizzled => EncodePs2_Pal8(rgba, GetPalette(t), t.Width, t.Height),
+            DicPixelFormat.PS2_4bpp_swizzled => EncodePs2_Pal4(t, rgba),
+            DicPixelFormat.PS2_8bpp_swizzled => EncodePs2_Pal8(t, rgba),
             DicPixelFormat.PS2_RGB5551 => EncodePs2_RGB5551(rgba, t.Width, t.Height),
             DicPixelFormat.PS2_RGBA8888 => EncodePs2_RGBA8888(rgba, t.Width, t.Height),
             DicPixelFormat.PSP_4bpp_swizzled => EncodePsp_Pal4(rgba, GetPalette(t), t.Width, t.Height),
@@ -61,11 +61,11 @@ public static class DicCodec
             DicPixelFormat.PSP_RGBA8888 => EncodePsp_Rgba8888(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_I8 => EncodeWii_I8(rgba, t.Width, t.Height),
             DicPixelFormat.Wii_IA8 => EncodeWii_IA8(rgba, t.Width, t.Height),
-            DicPixelFormat.Wii_RGB5A3 => EncodeWii_RGB5A3(rgba, t.Width, t.Height),
+            DicPixelFormat.Wii_RGB5A3 => EncodeWii_RGB5A3(t, rgba),
             DicPixelFormat.Wii_RGBA8 => EncodeWii_RGBA8(rgba, t.Width, t.Height),
-            DicPixelFormat.Wii_C4 => EncodeWii_C4(rgba, GetWiiTlut(t), t.Width, t.Height),
-            DicPixelFormat.Wii_C8 => EncodeWii_C8(rgba, GetWiiTlut(t), t.Width, t.Height),
-            DicPixelFormat.Wii_CMPR => EncodeWii_CMPR(rgba, t.Width, t.Height),
+            DicPixelFormat.Wii_C4 => EncodeWii_C4(t, rgba),
+            DicPixelFormat.Wii_C8 => EncodeWii_C8(t, rgba),
+            DicPixelFormat.Wii_CMPR => EncodeWii_CMPR(t, rgba),
             _ => throw new NotSupportedException($"Format {t.Format} not supported")
         };
     }
@@ -348,12 +348,29 @@ public static class DicCodec
         return o;
     }
 
-    private static byte[] EncodePs2_Pal4(byte[] rgba, byte[] pal, int w, int h)
+    private static byte[] EncodePs2_Pal4(DicTexture t, byte[] rgba)
     {
+        int w = t.Width, h = t.Height;
+        byte[] pal = GetPalette(t);
         var palette = DecodePs2Palette(pal, pal.Length, 16);
+        byte[] raw = GetImageBytes(t);
+        byte[] packedOriginal = Unpack4Bpp(raw, w * h);
+        byte[] originalIndices = new byte[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int sid = Ps2SwizzleId8(x, y, w);
+                if (sid < packedOriginal.Length) originalIndices[y * w + x] = packedOriginal[sid];
+            }
+
         byte[] indices = new byte[w * h];
         for (int i = 0; i < w * h; i++)
-            indices[i] = (byte)NearestPs2PaletteIndex(rgba, i * 4, palette, 16);
+        {
+            int original = originalIndices[i] & 0x0F;
+            indices[i] = Ps2PaletteColorMatches(rgba, i * 4, palette[original])
+                ? (byte)original
+                : (byte)NearestPs2PaletteIndex(rgba, i * 4, palette, 16);
+        }
 
         byte[] swizzled = new byte[w * h];
         for (int y = 0; y < h; y++)
@@ -385,13 +402,27 @@ public static class DicCodec
         return o;
     }
 
-    private static byte[] EncodePs2_Pal8(byte[] rgba, byte[] pal, int w, int h)
+    private static byte[] EncodePs2_Pal8(DicTexture t, byte[] rgba)
     {
+        int w = t.Width, h = t.Height;
+        byte[] pal = GetPalette(t);
         var palette = DecodePs2Palette(pal, pal.Length);
+        byte[] raw = GetImageBytes(t);
+        byte[] originalIndices = new byte[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int sid = Ps2SwizzleId8(x, y, w);
+                if (sid < raw.Length) originalIndices[y * w + x] = raw[sid];
+            }
+
         byte[] indices = new byte[w * h];
         for (int i = 0; i < w * h; i++)
         {
-            indices[i] = (byte)NearestPs2PaletteIndex(rgba, i * 4, palette, 256);
+            int original = originalIndices[i];
+            indices[i] = Ps2PaletteColorMatches(rgba, i * 4, palette[original])
+                ? (byte)original
+                : (byte)NearestPs2PaletteIndex(rgba, i * 4, palette, 256);
         }
         // Swizzle indices
         byte[] o = new byte[w * h];
@@ -403,6 +434,16 @@ public static class DicCodec
             }
         return o;
     }
+
+    private static byte[] GetImageBytes(DicTexture t)
+    {
+        byte[] bytes = new byte[t.ImageSize];
+        Buffer.BlockCopy(t.Owner.Data, t.ImageOffset, bytes, 0, t.ImageSize);
+        return bytes;
+    }
+
+    private static bool Ps2PaletteColorMatches(byte[] rgba, int offset, (byte r, byte g, byte b, byte a) c) =>
+        rgba[offset] == c.r && rgba[offset + 1] == c.g && rgba[offset + 2] == c.b && rgba[offset + 3] == c.a;
 
     private static int NearestPs2PaletteIndex(byte[] rgba, int offset, (byte r, byte g, byte b, byte a)[] palette, int count)
     {
@@ -720,10 +761,18 @@ public static class DicCodec
     }
     private static int GxEncodeRgb5A3(byte r, byte g, byte b, byte a)
     {
-        if (a < 0xFF - 8)
-            return ((a * 7 / 255) << 12) | ((r * 15 / 255) << 8) | ((g * 15 / 255) << 4) | (b * 15 / 255);
-        return 0x8000 | ((r * 31 / 255) << 10) | ((g * 31 / 255) << 5) | (b * 31 / 255);
+        if (a < 0xFF - 8 || (a == 255 && IsExact4Bit(r) && IsExact4Bit(g) && IsExact4Bit(b)))
+            return (((a * 7 + 127) / 255) << 12)
+                | (((r * 15 + 127) / 255) << 8)
+                | (((g * 15 + 127) / 255) << 4)
+                | ((b * 15 + 127) / 255);
+        return 0x8000
+            | (((r * 31 + 127) / 255) << 10)
+            | (((g * 31 + 127) / 255) << 5)
+            | ((b * 31 + 127) / 255);
     }
+
+    private static bool IsExact4Bit(byte value) => value % 17 == 0;
 
     private static byte[] DecodeWii_RGB5A3(byte[] raw, int w, int h)
     {
@@ -749,8 +798,10 @@ public static class DicCodec
         // Output is BGRA — decoders return BGRA directly.
         return o;
     }
-    private static byte[] EncodeWii_RGB5A3(byte[] rgba, int w, int h)
+    private static byte[] EncodeWii_RGB5A3(DicTexture t, byte[] rgba)
     {
+        int w = t.Width, h = t.Height;
+        byte[] original = GetImageBytes(t);
         byte[] o = new byte[((w + 3) / 4 * 4) * ((h + 3) / 4 * 4) * 2];
         int pos = 0;
         for (int by = 0; by < h; by += 4)
@@ -759,16 +810,26 @@ public static class DicCodec
                     for (int x = 0; x < 4; x++)
                     {
                         int px = bx + x, py = by + y;
-                        int v = 0;
+                        int srcPos = pos;
+                        int source = srcPos + 1 < original.Length ? (original[srcPos] << 8) | original[srcPos + 1] : 0;
+                        int v = source;
                         if (px < w && py < h)
                         {
                             int s = (py * w + px) * 4;
-                            v = GxEncodeRgb5A3(rgba[s], rgba[s + 1], rgba[s + 2], rgba[s + 3]);
+                            v = GxEncodeRgb5A3WithTemplate(rgba[s], rgba[s + 1], rgba[s + 2], rgba[s + 3], source);
                         }
                         if (pos + 1 < o.Length) { o[pos] = (byte)(v >> 8); o[pos + 1] = (byte)(v & 0xFF); pos += 2; }
                     }
         Array.Resize(ref o, pos);
         return o;
+    }
+
+    private static int GxEncodeRgb5A3WithTemplate(byte r, byte g, byte b, byte a, int original)
+    {
+        var c = GxRgb5A3(original);
+        if (c.r == r && c.g == g && c.b == b && c.a == a)
+            return original;
+        return GxEncodeRgb5A3(r, g, b, a);
     }
 
     private static byte[] DecodeWii_RGBA8(byte[] raw, int w, int h)
@@ -888,12 +949,21 @@ public static class DicCodec
         done:
         return o;
     }
-    private static byte[] EncodeWii_C4(byte[] rgba, (byte r, byte g, byte b, byte a)[] pal, int w, int h)
+    private static byte[] EncodeWii_C4(DicTexture t, byte[] rgba)
     {
+        int w = t.Width, h = t.Height;
+        var pal = GetWiiTlut(t);
+        byte[] originalIndices = DecodeWii_C4_Indices(GetImageBytes(t), w, h);
+
         // Re-quantize against existing palette.
         byte[] indices = new byte[w * h];
         for (int i = 0; i < w * h; i++)
-            indices[i] = (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], pal, 16);
+        {
+            int original = originalIndices[i] & 0x0F;
+            indices[i] = PaletteColorMatches(rgba, i * 4, pal[original])
+                ? (byte)original
+                : (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], pal, 16);
+        }
 
         int blocksX = (w + 7) / 8, blocksY = (h + 7) / 8;
         byte[] o = new byte[blocksX * blocksY * 32];
@@ -934,11 +1004,20 @@ public static class DicCodec
         done:
         return o;
     }
-    private static byte[] EncodeWii_C8(byte[] rgba, (byte r, byte g, byte b, byte a)[] pal, int w, int h)
+    private static byte[] EncodeWii_C8(DicTexture t, byte[] rgba)
     {
+        int w = t.Width, h = t.Height;
+        var pal = GetWiiTlut(t);
+        byte[] originalIndices = DecodeWii_C8_Indices(GetImageBytes(t), w, h);
+
         byte[] indices = new byte[w * h];
         for (int i = 0; i < w * h; i++)
-            indices[i] = (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], pal, 256);
+        {
+            int original = originalIndices[i];
+            indices[i] = PaletteColorMatches(rgba, i * 4, pal[original])
+                ? (byte)original
+                : (byte)NearestIndex(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3], pal, 256);
+        }
 
         int blocksX = (w + 7) / 8, blocksY = (h + 3) / 4;
         byte[] o = new byte[blocksX * blocksY * 32];
@@ -955,6 +1034,46 @@ public static class DicCodec
         Array.Resize(ref o, pos);
         return o;
     }
+
+    private static byte[] DecodeWii_C4_Indices(byte[] raw, int w, int h)
+    {
+        byte[] indices = new byte[w * h];
+        int pos = 0;
+        for (int by = 0; by < h; by += 8)
+            for (int bx = 0; bx < w; bx += 8)
+                for (int y = 0; y < 8; y++)
+                    for (int xpair = 0; xpair < 4; xpair++)
+                    {
+                        if (pos >= raw.Length) return indices;
+                        byte v = raw[pos++];
+                        int x0 = bx + xpair * 2;
+                        int py = by + y;
+                        if (py < h && x0 < w) indices[py * w + x0] = (byte)(v >> 4);
+                        if (py < h && x0 + 1 < w) indices[py * w + x0 + 1] = (byte)(v & 0x0F);
+                    }
+        return indices;
+    }
+
+    private static byte[] DecodeWii_C8_Indices(byte[] raw, int w, int h)
+    {
+        byte[] indices = new byte[w * h];
+        int pos = 0;
+        for (int by = 0; by < h; by += 4)
+            for (int bx = 0; bx < w; bx += 8)
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 8; x++)
+                    {
+                        if (pos >= raw.Length) return indices;
+                        int px = bx + x;
+                        int py = by + y;
+                        byte index = raw[pos++];
+                        if (px < w && py < h) indices[py * w + px] = index;
+                    }
+        return indices;
+    }
+
+    private static bool PaletteColorMatches(byte[] rgba, int offset, (byte r, byte g, byte b, byte a) c) =>
+        rgba[offset] == c.r && rgba[offset + 1] == c.g && rgba[offset + 2] == c.b && rgba[offset + 3] == c.a;
 
     private static int NearestIndex(byte r, byte g, byte b, byte a, (byte r, byte g, byte b, byte a)[] pal, int paletteCount)
     {
@@ -1020,12 +1139,9 @@ public static class DicCodec
         return r;
     }
 
-    private static byte[] EncodeWii_CMPR(byte[] rgba, int w, int h)
+    private static byte[] EncodeWii_CMPR(DicTexture t, byte[] rgba)
     {
-        // Reuse the PCA-based CMPR encoder from WiiGcCodec for higher quality.
-        // The Wii .dic CMPR layout is identical: 8x8 super-block, 4 DXT1 sub-blocks.
-        // We hand off to a shared helper.
-        return WiiGcCodecCmprBridge.Encode(rgba, w, h);
+        return WiiGcCodec.EncodeCmpr(rgba, t.Width, t.Height, GetImageBytes(t));
     }
 }
 

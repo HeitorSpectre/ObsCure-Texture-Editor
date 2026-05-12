@@ -74,12 +74,12 @@ public static class WiiGcCodec
     {
         return file.Format switch
         {
-            HvtFormat.CMPR => EncodeCmpr(rgba, file.Width, file.Height),
+            HvtFormat.CMPR => EncodeCmpr(rgba, file.Width, file.Height, file.PixelData),
             HvtFormat.RGBA32 => EncodeRgba32(rgba, file.Width, file.Height),
-            HvtFormat.RGB5A3 => EncodeSwizzled16(rgba, file.Width, file.Height, EncodeRgb5A3Pixel),
+            HvtFormat.RGB5A3 => EncodeRgb5A3(file, rgba),
             HvtFormat.IA8 => EncodeSwizzled16(rgba, file.Width, file.Height, EncodeIa8Pixel),
             HvtFormat.I8 => EncodeSwizzled8(rgba, file.Width, file.Height, EncodeI8Pixel),
-            HvtFormat.C8 => EncodeC8(rgba, file.Palette, file.Width, file.Height),
+            HvtFormat.C8 => EncodeC8(file, rgba),
             _ => throw new NotSupportedException($"Unsupported format: {file.FormatTag}")
         };
     }
@@ -149,7 +149,7 @@ public static class WiiGcCodec
         return Crop(outBgra, sw, sh, width, height);
     }
 
-    private static byte[] EncodeCmpr(byte[] rgba, int width, int height)
+    internal static byte[] EncodeCmpr(byte[] rgba, int width, int height, byte[]? template = null)
     {
         int sw = (width + 7) & ~7;
         int sh = (height + 7) & ~7;
@@ -184,6 +184,22 @@ public static class WiiGcCodec
                                     block[dy * 4 + dx] = (0, 0, 0, 0);
                                 }
                             }
+                        }
+
+                        if (template != null &&
+                            wp + 8 <= template.Length &&
+                            TryEncodeCmprBlockWithTemplate(block, template, wp, out byte[] templateBlock))
+                        {
+                            Buffer.BlockCopy(templateBlock, 0, outBuf, wp, templateBlock.Length);
+                            wp += templateBlock.Length;
+                            continue;
+                        }
+
+                        if (TryEncodeExactCmprBlock(block, out byte[] exactBlock))
+                        {
+                            Buffer.BlockCopy(exactBlock, 0, outBuf, wp, exactBlock.Length);
+                            wp += exactBlock.Length;
+                            continue;
                         }
 
                         int opaque = 0;
@@ -337,6 +353,175 @@ public static class WiiGcCodec
         p[3] = 255;
         return p;
     }
+
+    private static bool TryEncodeExactCmprBlock((byte R, byte G, byte B, byte A)[] block, out byte[] encoded)
+    {
+        encoded = new byte[8];
+        int[] candidates = new int[16];
+        int candidateCount = 0;
+        bool hasTransparent = false;
+
+        foreach (var px in block)
+        {
+            if (px.A < 128)
+            {
+                hasTransparent = true;
+                continue;
+            }
+
+            if (TryEncodeExactRgb565(px.R, px.G, px.B, out int c))
+            {
+                bool seen = false;
+                for (int i = 0; i < candidateCount; i++)
+                    if (candidates[i] == c) { seen = true; break; }
+                if (!seen) candidates[candidateCount++] = c;
+            }
+        }
+
+        if (candidateCount == 0)
+        {
+            encoded[0] = encoded[1] = encoded[2] = encoded[3] = 0;
+            for (int i = 4; i < 8; i++) encoded[i] = 0xFF;
+            return hasTransparent;
+        }
+
+        for (int ia = 0; ia < candidateCount; ia++)
+        {
+            for (int ib = 0; ib < candidateCount; ib++)
+            {
+                int c0 = candidates[ia];
+                int c1 = candidates[ib];
+                if (hasTransparent && c0 > c1) continue;
+
+                var palette = BuildCmprPalette(c0, c1);
+                uint bits = 0;
+                bool ok = true;
+                for (int i = 0; i < 16 && ok; i++)
+                {
+                    var px = block[i];
+                    int idx = -1;
+                    int max = c0 > c1 ? 3 : 2;
+                    for (int k = 0; k <= max; k++)
+                    {
+                        if (px.A >= 128 &&
+                            px.R == palette[k].R &&
+                            px.G == palette[k].G &&
+                            px.B == palette[k].B)
+                        {
+                            idx = k;
+                            break;
+                        }
+                    }
+                    if (idx < 0 && c0 <= c1 && px.A < 128) idx = 3;
+                    if (idx < 0) ok = false;
+                    else bits |= (uint)(idx & 0x03) << (30 - i * 2);
+                }
+
+                if (!ok) continue;
+
+                encoded[0] = (byte)(c0 >> 8);
+                encoded[1] = (byte)c0;
+                encoded[2] = (byte)(c1 >> 8);
+                encoded[3] = (byte)c1;
+                encoded[4] = (byte)(bits >> 24);
+                encoded[5] = (byte)(bits >> 16);
+                encoded[6] = (byte)(bits >> 8);
+                encoded[7] = (byte)bits;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryEncodeCmprBlockWithTemplate((byte R, byte G, byte B, byte A)[] block, byte[] template, int offset, out byte[] encoded)
+    {
+        encoded = new byte[8];
+        int c0 = (template[offset] << 8) | template[offset + 1];
+        int c1 = (template[offset + 2] << 8) | template[offset + 3];
+        uint originalBits = ((uint)template[offset + 4] << 24)
+            | ((uint)template[offset + 5] << 16)
+            | ((uint)template[offset + 6] << 8)
+            | template[offset + 7];
+
+        var palette = BuildCmprPalette(c0, c1);
+        uint bits = 0;
+        int max = c0 > c1 ? 3 : 2;
+
+        for (int i = 0; i < 16; i++)
+        {
+            var px = block[i];
+            int originalIndex = (int)((originalBits >> (30 - i * 2)) & 0x03);
+            int idx = -1;
+
+            if (ColorMatchesCmpr(px, palette[originalIndex]))
+            {
+                idx = originalIndex;
+            }
+            else
+            {
+                for (int k = 0; k <= max; k++)
+                {
+                    if (ColorMatchesCmpr(px, palette[k]))
+                    {
+                        idx = k;
+                        break;
+                    }
+                }
+                if (idx < 0 && c0 <= c1 && px.A < 128) idx = 3;
+            }
+
+            if (idx < 0) return false;
+            bits |= (uint)(idx & 0x03) << (30 - i * 2);
+        }
+
+        encoded[0] = template[offset];
+        encoded[1] = template[offset + 1];
+        encoded[2] = template[offset + 2];
+        encoded[3] = template[offset + 3];
+        encoded[4] = (byte)(bits >> 24);
+        encoded[5] = (byte)(bits >> 16);
+        encoded[6] = (byte)(bits >> 8);
+        encoded[7] = (byte)bits;
+        return true;
+    }
+
+    private static (byte R, byte G, byte B, byte A)[] BuildCmprPalette(int c0, int c1)
+    {
+        byte[] p0 = Rgb565ToRgba(c0);
+        byte[] p1 = Rgb565ToRgba(c1);
+        var palette = new (byte R, byte G, byte B, byte A)[4];
+        palette[0] = (p0[0], p0[1], p0[2], p0[3]);
+        palette[1] = (p1[0], p1[1], p1[2], p1[3]);
+        if (c0 > c1)
+        {
+            palette[2] = ((byte)((2 * p0[0] + p1[0]) / 3), (byte)((2 * p0[1] + p1[1]) / 3), (byte)((2 * p0[2] + p1[2]) / 3), 255);
+            palette[3] = ((byte)((p0[0] + 2 * p1[0]) / 3), (byte)((p0[1] + 2 * p1[1]) / 3), (byte)((p0[2] + 2 * p1[2]) / 3), 255);
+        }
+        else
+        {
+            palette[2] = ((byte)((p0[0] + p1[0]) >> 1), (byte)((p0[1] + p1[1]) >> 1), (byte)((p0[2] + p1[2]) >> 1), 255);
+            palette[3] = (0, 0, 0, 0);
+        }
+        return palette;
+    }
+
+    private static bool TryEncodeExactRgb565(byte r, byte g, byte b, out int encoded)
+    {
+        int r5 = (r * 31 + 127) / 255;
+        int g6 = (g * 63 + 127) / 255;
+        int b5 = (b * 31 + 127) / 255;
+        encoded = (r5 << 11) | (g6 << 5) | b5;
+        byte[] decoded = Rgb565ToRgba(encoded);
+        return decoded[0] == r && decoded[1] == g && decoded[2] == b;
+    }
+
+    private static bool ColorMatchesCmpr((byte R, byte G, byte B, byte A) px, (byte R, byte G, byte B, byte A) color)
+    {
+        if (px.A < 128 || color.A < 128) return px.A < 128 && color.A < 128;
+        return px.R == color.R && px.G == color.G && px.B == color.B;
+    }
+
     private static int EncodeRgb565(int r, int g, int b)
     {
         int r5 = (r * 31 + 127) / 255;
@@ -531,21 +716,69 @@ public static class WiiGcCodec
     }
     private static int EncodeRgb5A3Pixel(byte r, byte g, byte b, byte a)
     {
-        if (a >= 0xFF - 8) // fully opaque -> RGB555 with MSB=1
+        if (a < 0xFF - 8 || (a == 255 && IsExact4Bit(r) && IsExact4Bit(g) && IsExact4Bit(b)))
         {
-            int r5 = (r * 31) / 255;
-            int g5 = (g * 31) / 255;
-            int b5 = (b * 31) / 255;
-            return 0x8000 | (r5 << 10) | (g5 << 5) | b5;
-        }
-        else
-        {
-            int r4 = (r * 15) / 255;
-            int g4 = (g * 15) / 255;
-            int b4 = (b * 15) / 255;
-            int a3 = (a * 7) / 255;
+            int r4 = (r * 15 + 127) / 255;
+            int g4 = (g * 15 + 127) / 255;
+            int b4 = (b * 15 + 127) / 255;
+            int a3 = (a * 7 + 127) / 255;
             return (a3 << 12) | (r4 << 8) | (g4 << 4) | b4;
         }
+        else // opaque RGB555 with MSB=1
+        {
+            int r5 = (r * 31 + 127) / 255;
+            int g5 = (g * 31 + 127) / 255;
+            int b5 = (b * 31 + 127) / 255;
+            return 0x8000 | (r5 << 10) | (g5 << 5) | b5;
+        }
+    }
+
+    private static bool IsExact4Bit(byte value) => value % 17 == 0;
+
+    private static byte[] EncodeRgb5A3(HvtFile file, byte[] rgba)
+    {
+        int width = file.Width;
+        int height = file.Height;
+        var (bw, bh) = BlockSize(16);
+        int sw = (width + bw - 1) / bw * bw;
+        int sh = (height + bh - 1) / bh * bh;
+        byte[] outBuf = new byte[sw * sh * 2];
+
+        for (int y = 0; y < sh; y++)
+        {
+            for (int x = 0; x < sw; x++)
+            {
+                int dst = OffsetBpp16(x, y, sw);
+                int original = dst + 1 < file.PixelData.Length
+                    ? (file.PixelData[dst] << 8) | file.PixelData[dst + 1]
+                    : 0;
+
+                int p;
+                if (x < width && y < height)
+                {
+                    int s = (y * width + x) * 4;
+                    byte r = rgba[s], g = rgba[s + 1], b = rgba[s + 2], a = rgba[s + 3];
+                    p = EncodeRgb5A3PixelWithTemplate(r, g, b, a, original);
+                }
+                else
+                {
+                    p = original;
+                }
+
+                outBuf[dst] = (byte)(p >> 8);
+                outBuf[dst + 1] = (byte)p;
+            }
+        }
+        return outBuf;
+    }
+
+    private static int EncodeRgb5A3PixelWithTemplate(byte r, byte g, byte b, byte a, int original)
+    {
+        byte[] decoded = new byte[4];
+        DecodeRgb5A3Pixel(original, decoded, 0);
+        if (decoded[0] == r && decoded[1] == g && decoded[2] == b && decoded[3] == a)
+            return original;
+        return EncodeRgb5A3Pixel(r, g, b, a);
     }
 
     private static void DecodeIa8Pixel(int p, byte[] outRgba, int idx)
@@ -627,8 +860,12 @@ public static class WiiGcCodec
         return CropAsBgra(linearRgba, sw, sh, width, height);
     }
 
-    private static byte[] EncodeC8(byte[] rgba, byte[] palette, int width, int height)
+    private static byte[] EncodeC8(HvtFile file, byte[] rgba)
     {
+        byte[] palette = file.Palette;
+        int width = file.Width;
+        int height = file.Height;
+
         // Re-encode using nearest-match against the existing palette.
         var (bw, bh) = BlockSize(8);
         int sw = (width + bw - 1) / bw * bw;
@@ -655,6 +892,17 @@ public static class WiiGcCodec
                     int s = (y * width + x) * 4;
                     r = rgba[s]; g = rgba[s + 1]; b = rgba[s + 2]; a = rgba[s + 3];
                 }
+                int original = file.PixelData[OffsetBpp8(x, y, sw)];
+                int originalPi = original * 4;
+                if (r == palRgba[originalPi] &&
+                    g == palRgba[originalPi + 1] &&
+                    b == palRgba[originalPi + 2] &&
+                    a == palRgba[originalPi + 3])
+                {
+                    outBuf[OffsetBpp8(x, y, sw)] = (byte)original;
+                    continue;
+                }
+
                 int best = 0;
                 int bestD = int.MaxValue;
                 for (int i = 0; i < 256; i++)

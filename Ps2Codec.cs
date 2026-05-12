@@ -76,6 +76,9 @@ public static class Ps2Codec
         byte[] palOrdered = PaletteIsSwizzled
             ? UnswizzlePaletteCsm(file.Palette, needsAlphaScale)
             : ApplyAlphaScale((byte[])file.Palette.Clone(), needsAlphaScale);
+        byte[] originalLinearIndices = PixelDataIsSwizzled
+            ? UnswizzlePs2_8bit(file.PixelData, file.Width, file.Height)
+            : (byte[])file.PixelData.Clone();
 
         // Re-quantize into the existing palette by nearest match.
         // Source rgba is in (R, G, B, A) order; palette is stored BGRA.
@@ -86,6 +89,19 @@ public static class Ps2Codec
             byte g = rgba[i * 4 + 1];
             byte b = rgba[i * 4 + 2];
             byte a = rgba[i * 4 + 3];
+
+            int originalIndex = originalLinearIndices[i];
+            int originalPi = originalIndex * 4;
+            int originalR = PaletteIsBgra ? palOrdered[originalPi + 2] : palOrdered[originalPi + 0];
+            int originalG = palOrdered[originalPi + 1];
+            int originalB = PaletteIsBgra ? palOrdered[originalPi + 0] : palOrdered[originalPi + 2];
+            int originalA = palOrdered[originalPi + 3];
+            if (r == originalR && g == originalG && b == originalB && a == originalA)
+            {
+                linearIndices[i] = (byte)originalIndex;
+                continue;
+            }
+
             int best = 0, bestD = int.MaxValue;
             for (int k = 0; k < 256; k++)
             {

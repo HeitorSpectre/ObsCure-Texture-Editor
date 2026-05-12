@@ -394,7 +394,7 @@ internal static class Cli
         Console.WriteLine("Supported platforms and files:");
         Console.WriteLine("  PC:         .dic, .dip, Final Exam .hvt");
         Console.WriteLine("  PS2:        .dic, .hvi");
-        Console.WriteLine("  PSP:        .dic");
+        Console.WriteLine("  PSP:        .dic, .hvi");
         Console.WriteLine("  PS3:        Final Exam .hvt");
         Console.WriteLine("  Wii/GC:     .dic, .hvt");
         Console.WriteLine("  Xbox:       .xbr");

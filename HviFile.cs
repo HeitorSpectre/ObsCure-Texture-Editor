@@ -3,7 +3,7 @@ using System.IO;
 
 namespace HVTTool;
 
-// PS2 paletted texture format used by some games (extension .hvi).
+// PS2/PSP paletted texture format used by some games (extension .hvi).
 // Layout (all integers little-endian):
 //   0x00  4 bytes  magic "HVI "
 //   0x04  u32      version (=1)
@@ -26,7 +26,7 @@ public sealed class HviFile
     public byte[] PixelData { get; private set; } = Array.Empty<byte>();
     public byte[] Trailer { get; private set; } = Array.Empty<byte>();
 
-    public string FormatLabel => $"PS2 PAL{Bpp} {Width}×{Height} {Bpp}bpp";
+    public string FormatLabel => $"PS2/PSP HVI PAL{Bpp} {Width}x{Height} {Bpp}bpp";
 
     public HviFile(string path)
     {
