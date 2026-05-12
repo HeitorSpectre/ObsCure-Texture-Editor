@@ -32,7 +32,7 @@ ObsCure Texture Editor is a tool for editing textures from this franchise, desig
 ### FORMATS
 - `.dic` — Obscure / Obscure 2 texture dictionary (PC / PS2 / PSP / Wii)
 - `.dip` — Obscure 1 (PC)
-- `.hvi` — Obscure 1 / Obscure 2 (PS2)
+- `.hvi` — Obscure 1 / Obscure 2 (PS2 / PSP)
 - `.hvt` — Obscure 2 (Wii)
 - `.hvt` — Final Exam (PC / PS3 / Xbox 360)
 - `.xbr` — Obscure 1 (Xbox)
@@ -73,6 +73,9 @@ ObsCure Texture Editor is a tool for editing textures from this franchise, desig
 
 #### PS2 `.hvi`
 - PAL8 (8 bpp indexed texture with RGBA palette)
+
+#### PSP `.hvi`
+- PAL8
 
 #### Wii `.hvt`
 - I8
